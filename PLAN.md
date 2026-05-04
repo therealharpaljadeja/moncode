@@ -1,24 +1,43 @@
 # Moncode Roadmap and Build Plan
 
-Moncode is a Monad-first vibe-coding web app. The agent is built on the
-**Claude Code SDK** (`@anthropic-ai/claude-agent-sdk`) running server-side and
-driving a per-project **Vercel Sandbox** as its workspace. Domain knowledge
-comes from **Monskills** loaded as a Claude Code plugin. **Testnet only** —
-no mainnet code paths anywhere in this plan.
+Moncode is a Monad-first vibe-coding web app. Each project owns a
+**persistent Vercel Sandbox** (microVM, `iad1`) with the **Claude Code SDK**
+(`@anthropic-ai/claude-agent-sdk`) installed *inside* it. The sandbox runs
+the agent, the user's project, and the dev server. Domain knowledge comes
+from **Monskills** loaded as a Claude Code plugin. **Testnet only** — no
+mainnet code paths anywhere in this plan.
 
 ## Architecture and Foundations
-- [ ] Pin the runtime topology: Next.js web app, agent-runner service (Node
-      process running the Claude Code SDK), and a Vercel Sandbox per active
-      project. The agent-runner reads/writes the sandbox filesystem via the
-      sandbox's API; it does **not** run inside the sandbox itself, so SDK
-      session files live on our infra and survive sandbox recycling.
-- [ ] Define data models: users, projects, sessions (maps 1:1 to SDK
-      `session_id`), messages, credits, transactions. Wallets are owned by
-      Privy — we only store the Privy user id and read wallet info from
-      Privy on demand.
+- [ ] Pin the runtime topology:
+  - **Web app** (Next.js): chat UI, editor, file explorer, wallet drawer.
+  - **Backend API** (Next.js routes / dedicated service): Privy session
+    auth, sandbox lifecycle (create/get/stop/snapshot), wallet-tool
+    callbacks (Privy server-side signing), credit accounting, secrets
+    fetch, transactions DB.
+  - **Per-project Vercel Sandbox**: runs `@anthropic-ai/claude-agent-sdk`,
+    the user's project, and the dev server. The SDK runs **inside** the
+    sandbox (per Vercel's official Claude Agent SDK guide) so all
+    Read/Write/Edit/Bash tool calls are local — no remote round-trip per
+    tool — and the SDK session JSONL persists with the sandbox snapshot.
+  - **Communication**: backend ↔ sandbox over a long-lived WS to a small
+    Node bridge running inside the sandbox. The bridge forwards user
+    chat input into the SDK and streams `AssistantMessage` /
+    `ResultMessage` events back. Wallet tool callbacks make outbound
+    HTTPS from the sandbox to our backend with a per-sandbox short-lived
+    token issued at boot.
+- [ ] Define data models: users, projects, sessions (1:1 to SDK
+      `session_id`), messages, credits, transactions, snapshots
+      (`snapshotId` + sandbox name). Wallets are owned by Privy — store
+      only the Privy user id.
 - [ ] Set up environment configs for local, staging, and production.
+      Auth to Vercel Sandbox via `VERCEL_OIDC_TOKEN` (12-hour) in
+      production, or `VERCEL_TEAM_ID` + `VERCEL_PROJECT_ID` +
+      `VERCEL_TOKEN` for long-running services.
 - [ ] Add observability baseline (logs, traces, error tracking) with
-      per-session correlation ids that match the SDK `session_id`.
+      per-session correlation ids that match the SDK `session_id` and
+      the sandbox name.
+- [ ] Note region constraint: Vercel Sandbox runs in `iad1` only —
+      colocate backend and DB in `us-east` to keep callback latency low.
 
 ## Authentication and Wallets (Privy)
 - [ ] Integrate Privy authentication (social/email wallet onboarding).
@@ -48,44 +67,75 @@ real estate from code/preview. Proposed layout:
       approvals is the chosen pattern.
 
 ## Sandbox Runtime (Vercel Sandbox)
-- [ ] Implement provider abstraction over Vercel Sandbox: create, exec,
-      read/write file, stream logs, stop, snapshot/restore.
-- [ ] **Resumability strategy** — concretely:
-  - Each project owns one logical workspace. When the user opens a project,
-    we either (a) reattach to its still-warm sandbox if one is running, or
-    (b) create a fresh sandbox and restore the workspace from the last
-    snapshot before the agent runs.
-  - Workspace state = the project directory tarball + `node_modules` cache
-    + any committed env. We snapshot to object storage (S3/R2) on
-    `PostToolUse` for `Edit|Write|Bash` (debounced) and on session end.
-  - Agent state = the SDK session JSONL at
-    `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. This lives on
-    the agent-runner host, backed up to object storage, and is loaded via
-    `resume: <session_id>` when the user returns. This is independent of
-    the sandbox's lifecycle.
-  - Idle sandboxes are stopped after N minutes; on next user message the
-    runner restores from snapshot and resumes the SDK session.
-- [ ] Sandbox health checks and auto-recovery (restore snapshot, replay
-      last user message, resume SDK session).
+We use the `@vercel/sandbox` Node SDK and rely on first-class primitives
+rather than rolling our own persistence.
+- [ ] **Provider abstraction** with thin wrappers around the SDK:
+      `Sandbox.create`, `Sandbox.get`, `runCommand` (blocking +
+      `detached`), `sandbox.fs.*`, `writeFiles`, `readFile`,
+      `extendTimeout`, `stop`, `snapshot`, `domain(port)`,
+      `updateNetworkPolicy`.
+- [ ] **Persistent sandboxes (beta)** — one per project, named
+      `moncode-<project_id>`. Vercel auto-snapshots on stop and resumes
+      by name. **Drop the previously planned S3/R2 tar pipeline** — it
+      is redundant.
+  - Open project → `Sandbox.get({ name })`. If running, reattach. If
+    stopped, this triggers auto-resume from the latest snapshot.
+  - First time → `Sandbox.create({ name, source, ports, env,
+    networkPolicy })` with the starter template as `source: { type:
+    'git', url, revision }`.
+- [ ] **Lifecycle**: default 5-min timeout, extended via
+      `extendTimeout()` up to **45 min on Hobby / 5 hr on Pro**. We
+      target Pro for production so a coding session can last hours.
+      Idle sandboxes are stopped (manual `stop()` on inactivity); next
+      message auto-resumes them.
+- [ ] **Snapshot points**: rely on persistent-sandbox auto-snapshot on
+      stop. Add an explicit `sandbox.snapshot()` call on
+      "save checkpoint" and on session end. No debounced PostToolUse
+      snapshotting needed — the FS rides along inside the persistent
+      sandbox.
+- [ ] **Filesystem**: 32 GB ephemeral NVMe per sandbox; working dir
+      `/vercel/sandbox`; user `vercel-sandbox` with sudo. All file ops
+      from the backend go through `sandbox.fs.*` and `writeFiles` /
+      `readFile` (the latter returns a `ReadableStream` for large
+      files).
+- [ ] **Live preview**: `Sandbox.create({ ports: [3000, 8545, ...] })`
+      then `sandbox.domain(port)` for the public URL. Up to 15 ports
+      per sandbox. Dev server started via `runCommand({ detached:
+      true })` and its `command.logs()` async iterator streamed to the
+      browser logs panel.
+- [ ] **Health checks and recovery**: detect dead sandboxes, call
+      `Sandbox.get({ name })` to auto-resume from the latest snapshot,
+      replay last user message if the in-flight turn was lost, and
+      resume the SDK session via `resume: <session_id>` (the JSONL is
+      already inside the sandbox FS).
+- [ ] **Debug**: rely on Vercel's `sandbox connect <id>` interactive
+      shell + the Observability > Sandboxes dashboard for support.
 
-## Agent Orchestration
-- [ ] **Per-session long-running worker** (replacing the old "queue + worker"
-      framing). When a user sends a message, the web app routes it to the
-      agent-runner service, which spawns or attaches to a Node process for
-      that `session_id`. That process runs the SDK `query()`, streams
-      `AssistantMessage` / `ResultMessage` events over WebSocket back to
-      the browser, and exits when the run completes. We need this because
-      agent runs are minutes-long and HTTP responses are not.
+## Agent Orchestration (SDK runs inside the sandbox)
+- [ ] **In-sandbox agent process**: a small Node bridge inside each
+      sandbox imports `@anthropic-ai/claude-agent-sdk`, opens a WS to
+      our backend, and on each user message calls `query()` with the
+      project's `session_id`. Outputs are streamed back over the WS.
 - [ ] Use the **SDK's built-in tools** for code work: `Read`, `Write`,
       `Edit`, `Bash`, `Glob`, `Grep`, `WebFetch`, `WebSearch`. **Do not
       reimplement a tool layer.**
-- [ ] Use SDK `hooks.PostToolUse` matching `Edit|Write` to emit
-      file-change events to the frontend (file-explorer refresh, preview
-      reload).
-- [ ] Use SDK `hooks.PostToolUse` matching `Bash` to detect long-running
-      dev servers and surface the preview URL.
-- [ ] Iterative edit loop: on every user message, resume the existing
-      session (`resume: session_id`) rather than starting fresh.
+- [ ] **Hooks** fire locally (no proxy round-trip):
+  - `PostToolUse` matching `Edit|Write` → bridge POSTs `file-changed`
+    events to our backend, which fans out to the browser for file
+    explorer + preview reload.
+  - `PostToolUse` matching `Bash` → detect long-running dev servers
+    and surface their port via `sandbox.domain(port)` to the preview
+    iframe.
+- [ ] Iterative edit loop: every user message uses
+      `resume: <session_id>` (or `continue: true`) so the agent picks
+      up the full prior history. JSONL at
+      `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` lives
+      inside the sandbox FS and is preserved by snapshots.
+- [ ] **Why inside, not outside**: Vercel's KB guide
+      (`vercel.com/kb/guide/using-vercel-sandbox-claude-agent-sdk`)
+      endorses this pattern; tool calls avoid network latency; SDK
+      session storage is automatically captured by snapshots; the user
+      app and the agent share one FS so there's no sync drift.
 
 ## Custom Wallet Tools (the only tools we build)
 The SDK covers code editing. We only add MCP tools for things Claude Code
@@ -97,15 +147,18 @@ cannot do: anything that requires the user's wallet.
   - `monad_read_contract(address, abi, fn, args)` (no approval needed)
   - `monad_request_faucet()`
 - [ ] Gate every write tool through a **`canUseTool` callback** that:
-  1. Pauses the SDK run.
-  2. Pushes an "Action required" card into the chat with the decoded tx
-     preview (function, args, gas, value).
-  3. Awaits the user's Approve/Reject from the wallet drawer or inline
-     card. The Privy wallet signs on Approve.
-  4. Returns `{ behavior: "allow", updatedInput }` with the tx hash, or
-     `{ behavior: "deny" }`. The agent sees the result and continues.
-- [ ] All tx hashes are persisted to the project's transactions table and
-      surfaced in the wallet drawer with Monadscan links (see
+  1. Pauses the SDK run inside the sandbox.
+  2. Makes outbound HTTPS to our backend with the per-sandbox token,
+     passing the decoded tx (function, args, gas, value).
+  3. Backend pushes an "Action required" card into the user's chat over
+     WS. Awaits Approve/Reject from the wallet drawer or inline card.
+  4. On Approve, backend uses Privy server-side wallet to sign and
+     broadcast on Monad testnet, returns the tx hash to the held
+     callback.
+  5. The callback returns `{ behavior: "allow", updatedInput }` with
+     the tx hash, or `{ behavior: "deny" }`. The agent continues.
+- [ ] All tx hashes are persisted to the project's transactions table
+      and surfaced in the wallet drawer with Monadscan links (see
       Transactions Panel below).
 
 ## Editor, File Explorer, and Live Preview
@@ -113,51 +166,58 @@ cannot do: anything that requires the user's wallet.
       panel, streaming build/runtime logs.
 - [ ] **User edits to files** flow:
   1. User edits a file in the in-browser editor (Monaco/CodeMirror).
-  2. On save (Cmd-S or debounced), frontend POSTs the new contents to the
-     agent-runner, which writes to the sandbox FS via the sandbox API.
-  3. The runner emits the same `file-changed` event the SDK hook would
-     emit, so the file explorer and preview pane react identically to
-     user edits and agent edits.
-  4. The dev server inside the sandbox (Vite/Next) HMRs the change; the
-     preview iframe reloads.
-  5. The next agent turn naturally sees the updated file because the SDK
-     re-reads on `Read`.
-- [ ] Snapshot history per project (uses the same snapshot stream as the
-      Sandbox section) with one-click restore.
+  2. On save (Cmd-S or debounced), frontend POSTs the new contents to
+     the backend, which calls `sandbox.fs.writeFile(path, content)`.
+  3. The backend emits the same `file-changed` event the SDK
+     `PostToolUse` hook would emit, so the file explorer and preview
+     pane react identically to user edits and agent edits.
+  4. The dev server inside the sandbox (Vite/Next) HMRs the change
+     automatically (it's watching the same FS); the preview iframe
+     refreshes via HMR.
+  5. The next agent turn naturally sees the updated file because the
+     SDK reads from the same FS.
+- [ ] Snapshot history per project (uses `sandbox.snapshot()` and the
+      persistent-sandbox auto-snapshots) with one-click restore via
+      `Sandbox.create({ source: { type: 'snapshot', snapshotId } })`.
 
 ## Monad Domain Knowledge via Monskills
 Replaces the previous "Monad-Specific Developer Experience" section.
 Monskills (`therealharpaljadeja/monskills`) is a Claude Code plugin that
 ships Monad skills for contracts, deployment, wallet integration, gas,
 indexers, scaffolding, tooling, and Vercel deploy.
-- [ ] Install Monskills as a Claude Code plugin in the agent-runner so
-      skills auto-load from `.claude/skills/`. The agent picks the right
-      skill per task based on each `SKILL.md` description; no custom
-      retrieval layer needed.
+- [ ] Install Monskills as a Claude Code plugin inside the sandbox image
+      so skills auto-load from `.claude/skills/`. The agent picks the
+      right skill per task based on each `SKILL.md` description; no
+      custom retrieval layer needed.
 - [ ] Pin a Monskills version in `skills-lock.json` so prompts are
       reproducible across deploys.
 - [ ] Add a thin Moncode-specific skill on top: project conventions,
       Monad testnet RPC + chain id, Monadscan URLs, the wallet-tool
-      contract, and "always use the wallet tools, never call Bash to send
-      transactions."
-- [ ] Add starter templates as project scaffolds the agent can clone
-      (token, NFT, dApp, dashboard) — these come from Monskills'
-      `scaffold` and `wallet-integration` skills.
+      contract, and "always use the wallet tools, never call Bash to
+      send transactions."
+- [ ] Add starter templates as project scaffolds the agent can clone via
+      `Sandbox.create({ source: { type: 'git', url, revision } })` —
+      these come from Monskills' `scaffold` and `wallet-integration`
+      skills.
 
 ## Credit System and Billing
 - [ ] Keep usage model compatible with existing credit consumption logic.
 - [ ] Daily free grant: 5 credits per user per day.
 - [ ] **Idempotent daily grant job**: a scheduled job (cron / Inngest)
-      that issues one grant row per `(user_id, grant_date)` with a unique
-      constraint on those columns, so re-running the job for the same day
-      cannot double-grant. Job is safe to run on retries, on multiple
-      workers, and after partial failures.
+      that issues one grant row per `(user_id, grant_date)` with a
+      unique constraint on those columns, so re-running the job for the
+      same day cannot double-grant. Job is safe to run on retries, on
+      multiple workers, and after partial failures.
 - [ ] Build usage UI (remaining credits, refill timer, plan CTA).
-- [ ] **Defer paid plans**, but design the credits/entitlements schema so
-      adding plan tiers, Stripe webhooks, and entitlement sync later is a
-      drop-in (no schema migration of existing rows). One-line check:
+- [ ] **Defer paid plans**, but design the credits/entitlements schema
+      so adding plan tiers, Stripe webhooks, and entitlement sync later
+      is a drop-in (no migration of existing rows).
       `entitlements.credits_per_day` and `entitlements.plan_id` columns
       from day one, even if only the free plan exists.
+- [ ] **Cost model awareness**: Vercel Sandbox bills active CPU-hr +
+      provisioned RAM-hr + creations + egress + snapshot storage
+      ($0.08/GB-mo). Track sandbox usage per project to inform future
+      paid-plan pricing.
 
 ## Faucet
 - [ ] In-app faucet for **Monad testnet only**.
@@ -176,25 +236,42 @@ indexers, scaffolding, tooling, and Vercel deploy.
 
 ## Secrets / Env Var Storage (think hard)
 The agent and the user's app both need env vars (RPC keys, third-party
-API keys). We must never log them, must inject them into the sandbox at
-boot only, and must let the user view/edit them in the wallet drawer.
-- [ ] **Decision pending**: pick one and document the tradeoff:
-  - **Option A — Managed secrets (Infisical or Doppler)**: per-user
-    project in the secrets provider, fetched server-side at sandbox
-    boot and injected as env. Pros: rotation, audit log, no key
-    material on our DB. Cons: extra vendor, per-user provisioning.
-  - **Option B — Local encryption**: store ciphertexts in our DB,
-    encrypted with a KMS-managed master key (AWS KMS / GCP KMS /
-    Vercel encrypted env). Decrypt only in the agent-runner just
-    before sandbox boot. Pros: no extra vendor, simpler. Cons: we
-    own the blast radius.
-  - **Option C — Vercel Sandbox project env**: if Vercel Sandbox
-    exposes per-sandbox encrypted env via its own API, use it
-    directly (verify before committing).
-- [ ] Whichever option wins: never echo plaintext to logs, never expose
-      via SDK `Read` (filter `.env*` from the agent's allowed paths
-      unless the user opts in), and surface a UI in the wallet drawer
-      to add/edit/delete keys.
+API keys). Vercel Sandbox accepts env at create or per-command, but does
+**not** offer a separate managed-secrets primitive — env injection is
+the *delivery* mechanism, not the storage. Where the plaintext lives
+before injection is the real question. Pick one, document the tradeoff:
+- [ ] **Option A — Credentials brokering (Vercel firewall, Pro/Ent)**:
+      configure Vercel's firewall to inject auth headers at the proxy
+      for specific outbound hosts (e.g. RPC providers). Tokens never
+      enter the sandbox at all. Best for high-value tokens that match
+      a host-based pattern. Cons: requires Pro/Ent plan; only works
+      for header-based auth.
+- [ ] **Option B — Local KMS encryption**: store ciphertexts in our DB,
+      encrypted with a KMS-managed master key (AWS KMS / GCP KMS /
+      Vercel encrypted env). Decrypt at sandbox boot, inject via
+      `Sandbox.create({ env })`. Pros: no extra vendor, simpler. Cons:
+      we own the blast radius.
+- [ ] **Option C — Managed secrets (Infisical / Doppler)**: per-user
+      project in the secrets provider, fetched server-side at sandbox
+      boot and injected via `env`. Pros: rotation, audit log. Cons:
+      extra vendor, per-user provisioning.
+- [ ] **Recommended hybrid for M1**: Option B by default; Option A for
+      RPC tokens once we are on Pro; Option C deferred unless users
+      ask for it.
+- [ ] Whichever option wins: never echo plaintext to logs; surface
+      add/edit/delete in the wallet drawer; the agent's `Read` tool
+      can see `.env` so the dev server works, but mask values in the
+      file explorer UI and in chat transcripts.
+
+## Network Egress (use Vercel's firewall, not a hand-rolled allowlist)
+- [ ] Configure `networkPolicy` at sandbox create with an explicit
+      allow list: Monad testnet RPC, Monadscan, npm registry, Vercel
+      APIs, GitHub, our backend, Privy, and anything Monskills
+      requires.
+- [ ] Update via `sandbox.updateNetworkPolicy(...)` if the user
+      installs a package that needs another host (with confirmation
+      UI).
+- [ ] SNI-based filtering and subnet allow/deny per Vercel's docs.
 
 ## Interactive Agent Requests (built on `canUseTool`)
 - [ ] Reuse the same approval mechanism the wallet tools use for any
@@ -204,25 +281,34 @@ boot only, and must let the user view/edit them in the wallet drawer.
       returns once user input is provided.
 
 ## Security and Reliability
-- [ ] Sandbox egress allowlist (Monad RPC, Monadscan, npm registry,
-      Vercel, GitHub, anything Monskills explicitly needs).
+- [ ] Sandbox isolation: Firecracker microVM, dedicated kernel — built
+      for untrusted code. We don't add a second layer.
+- [ ] Use `networkPolicy` for egress (above).
+- [ ] Per-sandbox short-lived auth token for callbacks, rotated on
+      sandbox restart.
 - [ ] Abuse detection for prompts, faucet use, and automation loops.
 - [ ] Backup, incident response, and kill-switch controls.
 
 ## QA, Launch, and Iteration
-- [ ] End-to-end test coverage for: auth, project create, agent
-      iteration, wallet approval, faucet, secret injection, snapshot
-      restore.
-- [ ] Load tests for concurrent agent runs and preview traffic.
+- [ ] End-to-end test coverage for: auth, project create from git
+      template, agent iteration, wallet approval, faucet, secret
+      injection, sandbox stop/auto-resume, snapshot restore.
+- [ ] Load tests for concurrent agent runs and preview traffic — note
+      Hobby caps at 10 concurrent sandboxes, Pro at 2000.
 - [ ] Beta feedback channel and prioritization process.
 
 ## Milestones
-- [ ] **M1 (MVP)**: Privy auth, Vercel Sandbox per project, Claude Code
-      SDK + Monskills agent loop, file explorer + preview, header pill +
-      wallet drawer, inline approval cards, `monad_deploy_contract` and
+- [ ] **M1 (MVP)**: Privy auth, persistent Vercel Sandbox per project
+      (`Sandbox.create` + `Sandbox.get` by name), Claude Code SDK +
+      Monskills installed inside the sandbox image, file explorer +
+      preview via `sandbox.domain(port)`, header pill + wallet drawer,
+      inline approval cards, `monad_deploy_contract` and
       `monad_send_transaction` tools, daily credit grant, faucet,
-      transactions panel.
-- [ ] **M2**: Snapshot/resume across sandbox restarts, env-var manager,
-      starter templates, snapshot history with restore.
+      transactions panel, KMS-encrypted secrets (Option B),
+      `networkPolicy` egress allowlist.
+- [ ] **M2**: Snapshot history with restore, env-var manager UI,
+      starter templates via git source, credentials brokering for RPC
+      tokens (Option A), Vercel Pro plan migration for 5-hour
+      sessions.
 - [ ] **M3**: Paid plans + entitlement webhooks, advanced templates,
       preflight tx simulation, team workflows.
