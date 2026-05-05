@@ -7,6 +7,28 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  ChevronRight,
+  ChevronDown,
+  ExternalLink,
+  RefreshCw,
+} from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
 
 type BootStatus = "idle" | "pending" | "ready" | "failed";
 
@@ -192,38 +214,38 @@ export default function Page() {
   }, [busy, input, refetchFiles]);
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(360px, 40fr) 60fr",
-        height: "100vh",
-        gap: 1,
-        background: "#1a1a24",
-      }}
+    <ResizablePanelGroup
+      direction="horizontal"
+      className="h-screen w-screen bg-background"
     >
-      <ChatPane
-        items={items}
-        input={input}
-        setInput={setInput}
-        send={send}
-        busy={busy}
-        bootStatus={bootStatus}
-      />
-      <RightPane
-        bootStatus={bootStatus}
-        bootLog={bootLog}
-        bootError={bootError}
-        sandboxUrl={sandboxUrl}
-        iframeNonce={iframeNonce}
-        tab={tab}
-        setTab={setTab}
-        tree={tree}
-        activeFile={activeFile}
-        activeContent={activeContent}
-        openFile={openFile}
-        refetchFiles={refetchFiles}
-      />
-    </div>
+      <ResizablePanel defaultSize={40} minSize={28} className="min-w-0">
+        <ChatPane
+          items={items}
+          input={input}
+          setInput={setInput}
+          send={send}
+          busy={busy}
+          bootStatus={bootStatus}
+        />
+      </ResizablePanel>
+      <ResizableHandle />
+      <ResizablePanel defaultSize={60} minSize={30} className="min-w-0">
+        <RightPane
+          bootStatus={bootStatus}
+          bootLog={bootLog}
+          bootError={bootError}
+          sandboxUrl={sandboxUrl}
+          iframeNonce={iframeNonce}
+          tab={tab}
+          setTab={setTab}
+          tree={tree}
+          activeFile={activeFile}
+          activeContent={activeContent}
+          openFile={openFile}
+          refetchFiles={refetchFiles}
+        />
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }
 
@@ -349,9 +371,9 @@ function ChatPane({
   busy: boolean;
   bootStatus: BootStatus;
 }) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    endRef.current?.scrollIntoView({ block: "end" });
   }, [items.length]);
 
   const placeholder =
@@ -362,58 +384,32 @@ function ChatPane({
         : "Spinning up workspace…";
 
   return (
-    <section
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        background: "#0b0b10",
-        minWidth: 0,
-      }}
-    >
-      <header
-        style={{
-          padding: "12px 16px",
-          borderBottom: "1px solid #1a1a24",
-          fontWeight: 600,
-        }}
-      >
+    <section className="flex h-full min-h-0 flex-col">
+      <header className="flex h-12 shrink-0 items-center border-b px-4 font-semibold">
         Moncode
       </header>
-      <div
-        ref={scrollRef}
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          padding: "16px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
-        }}
-      >
-        {items.length === 0 && (
-          <div style={{ opacity: 0.6, fontSize: 13 }}>
-            Describe a Monad dApp and the agent will build it. Files write
-            into the sandbox and the preview reloads on the right.
-          </div>
-        )}
-        {items.map((item, i) => (
-          <ChatBubble key={i} item={item} />
-        ))}
-      </div>
+      <ScrollArea className="flex-1 min-h-0">
+        <div className="flex flex-col gap-3 p-4">
+          {items.length === 0 && (
+            <div className="text-xs text-muted-foreground">
+              Describe a Monad dApp and the agent will build it. Files write
+              into the sandbox and the preview reloads on the right.
+            </div>
+          )}
+          {items.map((item, i) => (
+            <ChatBubble key={i} item={item} />
+          ))}
+          <div ref={endRef} />
+        </div>
+      </ScrollArea>
       <form
         onSubmit={(e) => {
           e.preventDefault();
           send();
         }}
-        style={{
-          display: "flex",
-          gap: 8,
-          padding: 12,
-          borderTop: "1px solid #1a1a24",
-        }}
+        className="flex shrink-0 items-end gap-2 border-t p-3"
       >
-        <textarea
+        <Textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -425,14 +421,14 @@ function ChatPane({
           placeholder={placeholder}
           rows={2}
           disabled={bootStatus !== "ready" || busy}
-          style={{ flex: 1, resize: "none" }}
+          className="flex-1 resize-none"
         />
-        <button
+        <Button
           type="submit"
           disabled={bootStatus !== "ready" || busy || !input.trim()}
         >
           {busy ? "…" : "Send"}
-        </button>
+        </Button>
       </form>
     </section>
   );
@@ -441,33 +437,19 @@ function ChatPane({
 function ChatBubble({ item }: { item: ChatItem }) {
   if (item.kind === "user") {
     return (
-      <div
-        style={{
-          alignSelf: "flex-end",
-          background: "#1f2533",
-          border: "1px solid #2a2f44",
-          borderRadius: 8,
-          padding: "8px 12px",
-          maxWidth: "85%",
-        }}
-      >
-        <pre>{item.text}</pre>
+      <div className="self-end max-w-[85%] rounded-lg border bg-secondary px-3 py-2">
+        <pre className="whitespace-pre-wrap break-words font-sans text-sm">
+          {item.text}
+        </pre>
       </div>
     );
   }
   if (item.kind === "assistant" || item.kind === "result") {
     return (
-      <div
-        style={{
-          alignSelf: "flex-start",
-          background: "#14141c",
-          border: "1px solid #1f1f2c",
-          borderRadius: 8,
-          padding: "8px 12px",
-          maxWidth: "95%",
-        }}
-      >
-        <pre>{item.text}</pre>
+      <div className="self-start max-w-[95%] rounded-lg border bg-card px-3 py-2">
+        <pre className="whitespace-pre-wrap break-words font-sans text-sm">
+          {item.text}
+        </pre>
       </div>
     );
   }
@@ -475,15 +457,10 @@ function ChatBubble({ item }: { item: ChatItem }) {
     return <ToolUseCard item={item} />;
   }
   return (
-    <div
-      style={{
-        background: "#3a1414",
-        border: "1px solid #5a1f1f",
-        borderRadius: 8,
-        padding: "8px 12px",
-      }}
-    >
-      <pre>{item.text}</pre>
+    <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-destructive-foreground">
+      <pre className="whitespace-pre-wrap break-words font-sans text-sm">
+        {item.text}
+      </pre>
     </div>
   );
 }
@@ -495,53 +472,31 @@ function ToolUseCard({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div
-      style={{
-        alignSelf: "flex-start",
-        background: "#10131a",
-        border: "1px solid #1c2030",
-        borderRadius: 8,
-        padding: "6px 10px",
-        fontSize: 12,
-        maxWidth: "95%",
-      }}
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className="self-start max-w-[95%] rounded-lg border bg-card px-3 py-1.5 text-xs"
     >
-      <div
-        onClick={() => setOpen((v) => !v)}
-        style={{
-          cursor: "pointer",
-          opacity: 0.85,
-          display: "flex",
-          gap: 6,
-          alignItems: "center",
-        }}
-      >
-        <span>{open ? "▾" : "▸"}</span>
-        <span style={{ fontWeight: 600 }}>{item.name}</span>
-        {item.isError && (
-          <span style={{ color: "#ff6b6b" }}>error</span>
+      <CollapsibleTrigger className="flex w-full items-center gap-1.5 text-left">
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
         )}
-      </div>
-      {open && (
-        <div style={{ marginTop: 6 }}>
-          <pre style={{ opacity: 0.8 }}>
-            {JSON.stringify(item.input, null, 2)}
+        <span className="font-semibold">{item.name}</span>
+        {item.isError && <span className="text-destructive">error</span>}
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-1.5 space-y-1.5">
+        <pre className="whitespace-pre-wrap break-words text-muted-foreground">
+          {JSON.stringify(item.input, null, 2)}
+        </pre>
+        {item.result !== undefined && (
+          <pre className="whitespace-pre-wrap break-words border-t pt-1.5 text-muted-foreground">
+            {item.result}
           </pre>
-          {item.result !== undefined && (
-            <pre
-              style={{
-                marginTop: 6,
-                opacity: 0.7,
-                borderTop: "1px solid #1c2030",
-                paddingTop: 6,
-              }}
-            >
-              {item.result}
-            </pre>
-          )}
-        </div>
-      )}
-    </div>
+        )}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -576,68 +531,54 @@ function RightPane({
     return <BootPanel log={bootLog} error={bootError} status={bootStatus} />;
   }
   return (
-    <section
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        background: "#0b0b10",
-        minWidth: 0,
-      }}
+    <Tabs
+      value={tab}
+      onValueChange={(v) => setTab(v as Tab)}
+      className="flex h-full min-h-0 flex-col"
     >
-      <header
-        style={{
-          padding: "8px 12px",
-          borderBottom: "1px solid #1a1a24",
-          display: "flex",
-          gap: 6,
-          alignItems: "center",
-        }}
-      >
-        <button
-          onClick={() => setTab("preview")}
-          style={{
-            background: tab === "preview" ? "#1a1a24" : "transparent",
-          }}
-        >
-          Preview
-        </button>
-        <button
-          onClick={() => setTab("files")}
-          style={{
-            background: tab === "files" ? "#1a1a24" : "transparent",
-          }}
-        >
-          Files
-        </button>
-        <div style={{ flex: 1 }} />
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
+        <TabsList>
+          <TabsTrigger value="preview">Preview</TabsTrigger>
+          <TabsTrigger value="files">Files</TabsTrigger>
+        </TabsList>
+        <div className="flex-1" />
         {tab === "preview" && sandboxUrl && (
-          <>
-            <a
-              href={sandboxUrl}
-              target="_blank"
-              rel="noreferrer"
-              style={{ color: "inherit", textDecoration: "none" }}
-            >
-              <button>Open ↗</button>
+          <Button asChild variant="outline" size="sm">
+            <a href={sandboxUrl} target="_blank" rel="noreferrer">
+              Open <ExternalLink className="ml-1 h-3.5 w-3.5" />
             </a>
-          </>
+          </Button>
         )}
         {tab === "files" && (
-          <button onClick={refetchFiles}>Refresh</button>
+          <Button variant="outline" size="sm" onClick={refetchFiles}>
+            <RefreshCw className="mr-1 h-3.5 w-3.5" /> Refresh
+          </Button>
         )}
       </header>
-      {tab === "preview" ? (
+      <TabsContent
+        value="preview"
+        forceMount
+        className={cn(
+          "mt-0 flex-1 min-h-0 data-[state=inactive]:hidden",
+        )}
+      >
         <PreviewIframe url={sandboxUrl} nonce={iframeNonce} />
-      ) : (
+      </TabsContent>
+      <TabsContent
+        value="files"
+        forceMount
+        className={cn(
+          "mt-0 flex-1 min-h-0 data-[state=inactive]:hidden",
+        )}
+      >
         <FilesView
           tree={tree}
           activeFile={activeFile}
           activeContent={activeContent}
           openFile={openFile}
         />
-      )}
-    </section>
+      </TabsContent>
+    </Tabs>
   );
 }
 
@@ -654,14 +595,16 @@ function PreviewIframe({
   }, [url, nonce]);
   if (!src) {
     return (
-      <div style={{ padding: 16, opacity: 0.6 }}>No preview URL yet.</div>
+      <div className="p-4 text-sm text-muted-foreground">
+        No preview URL yet.
+      </div>
     );
   }
   return (
     <iframe
       key={src}
       src={src}
-      style={{ flex: 1, border: "none", background: "#fff" }}
+      className="block h-full w-full border-0 bg-white"
     />
   );
 }
@@ -678,33 +621,31 @@ function FilesView({
   openFile: (p: string) => void;
 }) {
   return (
-    <div
-      style={{
-        flex: 1,
-        display: "grid",
-        gridTemplateColumns: "260px 1fr",
-        minHeight: 0,
-      }}
-    >
-      <div
-        style={{
-          overflow: "auto",
-          borderRight: "1px solid #1a1a24",
-          padding: 8,
-        }}
-      >
-        <FileTree nodes={tree} active={activeFile} onPick={openFile} />
-      </div>
-      <div style={{ overflow: "auto", padding: 12 }}>
-        {activeFile ? (
-          <pre style={{ fontSize: 12, lineHeight: 1.45 }}>
-            {activeContent}
-          </pre>
-        ) : (
-          <div style={{ opacity: 0.5 }}>Select a file.</div>
-        )}
-      </div>
-    </div>
+    <ResizablePanelGroup direction="horizontal" className="h-full">
+      <ResizablePanel defaultSize={28} minSize={15} className="min-w-0">
+        <ScrollArea className="h-full">
+          <div className="p-2">
+            <FileTree nodes={tree} active={activeFile} onPick={openFile} />
+          </div>
+        </ScrollArea>
+      </ResizablePanel>
+      <ResizableHandle />
+      <ResizablePanel defaultSize={72} minSize={30} className="min-w-0">
+        <ScrollArea className="h-full">
+          <div className="p-3">
+            {activeFile ? (
+              <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed">
+                {activeContent}
+              </pre>
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                Select a file.
+              </div>
+            )}
+          </div>
+        </ScrollArea>
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }
 
@@ -721,24 +662,16 @@ function FileTree({
 }) {
   return (
     <ul
-      style={{
-        listStyle: "none",
-        margin: 0,
-        padding: 0,
-        paddingLeft: depth === 0 ? 0 : 12,
-      }}
+      className={cn(
+        "list-none m-0 p-0",
+        depth > 0 && "pl-3",
+      )}
     >
       {nodes.map((node) => (
         <li key={node.path}>
           {node.type === "dir" ? (
             <details open={depth < 1}>
-              <summary
-                style={{
-                  cursor: "pointer",
-                  padding: "2px 4px",
-                  fontSize: 13,
-                }}
-              >
+              <summary className="cursor-pointer rounded px-1 py-0.5 text-sm hover:bg-accent">
                 {node.name}
               </summary>
               {node.children && node.children.length > 0 && (
@@ -753,13 +686,10 @@ function FileTree({
           ) : (
             <div
               onClick={() => onPick(node.path)}
-              style={{
-                cursor: "pointer",
-                padding: "2px 4px",
-                fontSize: 13,
-                background: active === node.path ? "#1a1a24" : "transparent",
-                borderRadius: 4,
-              }}
+              className={cn(
+                "cursor-pointer rounded px-1 py-0.5 text-sm hover:bg-accent",
+                active === node.path && "bg-accent text-accent-foreground",
+              )}
             >
               {node.name}
             </div>
@@ -779,46 +709,29 @@ function BootPanel({
   error: string | null;
   status: BootStatus;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    ref.current?.scrollTo({ top: ref.current.scrollHeight });
+    endRef.current?.scrollIntoView({ block: "end" });
   }, [log.length]);
   return (
-    <section
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        background: "#0b0b10",
-        padding: 16,
-        gap: 12,
-      }}
-    >
-      <header style={{ fontWeight: 600 }}>
+    <section className="flex h-full min-h-0 flex-col gap-3 p-4">
+      <header className="shrink-0 font-semibold">
         {status === "failed" ? "Boot failed" : "Spinning up your workspace…"}
       </header>
-      <div
-        ref={ref}
-        style={{
-          flex: 1,
-          overflow: "auto",
-          fontFamily:
-            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-          fontSize: 12,
-          background: "#06060a",
-          border: "1px solid #1a1a24",
-          borderRadius: 6,
-          padding: 12,
-        }}
-      >
-        {log.length === 0 ? (
-          <span style={{ opacity: 0.5 }}>connecting…</span>
-        ) : (
-          log.map((l, i) => <div key={i}>{l}</div>)
-        )}
+      <div className="flex-1 min-h-0 rounded-md border bg-muted/40">
+        <ScrollArea className="h-full">
+          <div className="p-3 font-mono text-xs">
+            {log.length === 0 ? (
+              <span className="text-muted-foreground">connecting…</span>
+            ) : (
+              log.map((l, i) => <div key={i}>{l}</div>)
+            )}
+            <div ref={endRef} />
+          </div>
+        </ScrollArea>
       </div>
       {error && (
-        <div style={{ color: "#ff8080", fontSize: 12 }}>Error: {error}</div>
+        <div className="shrink-0 text-xs text-destructive">Error: {error}</div>
       )}
     </section>
   );
