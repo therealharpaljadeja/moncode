@@ -1,6 +1,5 @@
 import path from "path";
 import fs from "fs/promises";
-import { Sandbox } from "@vercel/sandbox";
 import {
   APP_PORT,
   SANDBOX_CWD,
@@ -189,6 +188,7 @@ export async function createSandboxForSession(): Promise<Session> {
     throw new Error("ANTHROPIC_API_KEY is required");
   }
 
+  const { Sandbox } = await import("@vercel/sandbox");
   const sandbox = await Sandbox.create({
     runtime: "node22",
     ports: [APP_PORT],
