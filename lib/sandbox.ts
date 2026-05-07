@@ -4,7 +4,9 @@ export type BootListener = (line: string) => void;
 
 export type Session = {
   cookieSessionId: string;
-  sandbox: Sandbox;
+  // null while bootPromise is still awaiting Sandbox.create. Becomes non-null
+  // before bootStatus transitions to "ready".
+  sandbox: Sandbox | null;
   sandboxUrl: string;
   agentSessionId: string | null;
   bootPromise: Promise<void>;
@@ -38,7 +40,7 @@ export function setSession(sessionId: string, session: Session): void {
 export function deleteSession(sessionId: string): void {
   const existing = cache().sessions.get(sessionId);
   if (existing) {
-    void existing.sandbox.stop().catch(() => {});
+    void existing.sandbox?.stop().catch(() => {});
     cache().sessions.delete(sessionId);
   }
 }

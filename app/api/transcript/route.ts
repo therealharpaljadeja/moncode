@@ -13,7 +13,7 @@ export async function GET() {
     return NextResponse.json({ messages: [] });
   }
   const session = getSession(cookieId);
-  if (!session) {
+  if (!session || session.bootStatus !== "ready" || !session.sandbox) {
     return NextResponse.json({ messages: [] });
   }
   const sid = session.agentSessionId;
