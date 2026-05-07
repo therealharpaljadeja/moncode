@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { getOrCreateSessionId } from "@/lib/session";
 import { getSession, setSession } from "@/lib/sandbox";
-import { createSandboxForSession } from "@/lib/bootstrap";
+import {
+  createSandboxForSession,
+  reattachSession,
+} from "@/lib/bootstrap";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,8 +15,14 @@ export async function POST() {
 
   if (!session) {
     try {
-      session = await createSandboxForSession();
-      setSession(sessionId, session);
+      const reattached = await reattachSession(sessionId);
+      if (reattached) {
+        setSession(sessionId, reattached);
+        session = reattached;
+      } else {
+        session = await createSandboxForSession(sessionId);
+        setSession(sessionId, session);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return NextResponse.json(

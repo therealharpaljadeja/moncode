@@ -1,4 +1,5 @@
 import { SANDBOX_CWD, Session } from "@/lib/sandbox";
+import { upsertStored } from "@/lib/session-store";
 
 export type AgentEvent =
   | { type: "sdk_message"; message: Record<string, unknown> }
@@ -91,6 +92,8 @@ function captureSessionId(
     (type === "system" && subtype === "init") ||
     type === "result"
   ) {
+    if (session.agentSessionId === sid) return;
     session.agentSessionId = sid;
+    void upsertStored(session.cookieSessionId, { agentSessionId: sid });
   }
 }

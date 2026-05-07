@@ -6,6 +6,11 @@ import {
   Session,
   appendBootLog,
 } from "@/lib/sandbox";
+import {
+  getStored,
+  removeStored,
+  upsertStored,
+} from "@/lib/session-store";
 
 const FORTY_FIVE_MINUTES_MS = 45 * 60 * 1000;
 const READINESS_TIMEOUT_MS = 5 * 60 * 1000;
@@ -182,7 +187,9 @@ export function bootSandbox(session: Session): Promise<void> {
   })();
 }
 
-export async function createSandboxForSession(): Promise<Session> {
+export async function createSandboxForSession(
+  cookieSessionId: string,
+): Promise<Session> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("ANTHROPIC_API_KEY is required");
@@ -196,7 +203,14 @@ export async function createSandboxForSession(): Promise<Session> {
     timeout: FORTY_FIVE_MINUTES_MS,
   });
 
+  await upsertStored(cookieSessionId, {
+    sandboxId: sandbox.sandboxId,
+    agentSessionId: null,
+    createdAt: Date.now(),
+  });
+
   const session: Session = {
+    cookieSessionId,
     sandbox,
     sandboxUrl: sandbox.domain(APP_PORT),
     agentSessionId: null,
@@ -208,4 +222,38 @@ export async function createSandboxForSession(): Promise<Session> {
 
   session.bootPromise = bootSandbox(session);
   return session;
+}
+
+/**
+ * On host cold-start, try to reconnect to a sandbox we previously created for
+ * this cookie. The dev server inside the sandbox kept running, so we skip the
+ * full boot path and mark the session ready immediately.
+ *
+ * Returns null if there's no record, or if Sandbox.get fails (sandbox expired
+ * or was stopped). In both cases the disk record is cleared so the caller
+ * boots a fresh sandbox.
+ */
+export async function reattachSession(
+  cookieSessionId: string,
+): Promise<Session | null> {
+  const stored = await getStored(cookieSessionId);
+  if (!stored?.sandboxId) return null;
+
+  try {
+    const { Sandbox } = await import("@vercel/sandbox");
+    const sandbox = await Sandbox.get({ sandboxId: stored.sandboxId });
+    return {
+      cookieSessionId,
+      sandbox,
+      sandboxUrl: sandbox.domain(APP_PORT),
+      agentSessionId: stored.agentSessionId ?? null,
+      bootPromise: Promise.resolve(),
+      bootStatus: "ready",
+      bootLog: ["Reconnected to existing workspace."],
+      bootListeners: new Set(),
+    };
+  } catch {
+    await removeStored(cookieSessionId).catch(() => {});
+    return null;
+  }
 }

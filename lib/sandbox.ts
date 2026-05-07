@@ -3,6 +3,7 @@ import type { Sandbox } from "@vercel/sandbox";
 export type BootListener = (line: string) => void;
 
 export type Session = {
+  cookieSessionId: string;
   sandbox: Sandbox;
   sandboxUrl: string;
   agentSessionId: string | null;
