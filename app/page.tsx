@@ -59,6 +59,9 @@ export default function Page() {
   const [bootLog, setBootLog] = useState<string[]>([]);
   const [bootError, setBootError] = useState<string | null>(null);
   const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
+  // True once POST /api/sandbox has responded — at that point the cookie is
+  // set and the in-memory session is registered, so SSE can connect.
+  const [postReturned, setPostReturned] = useState(false);
 
   const [items, setItems] = useState<ChatItem[]>([]);
   const [input, setInput] = useState("");
@@ -73,6 +76,7 @@ export default function Page() {
 
   const ensureSandbox = useCallback(async () => {
     setBootStatus("pending");
+    setPostReturned(false);
     try {
       const res = await fetch("/api/sandbox", { method: "POST" });
       const data = await res.json();
@@ -86,6 +90,8 @@ export default function Page() {
     } catch (err) {
       setBootStatus("failed");
       setBootError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPostReturned(true);
     }
   }, []);
 
@@ -94,7 +100,7 @@ export default function Page() {
   }, [ensureSandbox]);
 
   useEffect(() => {
-    if (bootStatus !== "pending") return;
+    if (!postReturned || bootStatus !== "pending") return;
     const es = new EventSource("/api/sandbox/stream");
     es.addEventListener("log", (ev) => {
       try {
@@ -123,7 +129,7 @@ export default function Page() {
       es.close();
     };
     return () => es.close();
-  }, [bootStatus]);
+  }, [postReturned, bootStatus]);
 
   const refetchFiles = useCallback(async () => {
     try {

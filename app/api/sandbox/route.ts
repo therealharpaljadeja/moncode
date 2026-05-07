@@ -20,7 +20,7 @@ export async function POST() {
         setSession(sessionId, reattached);
         session = reattached;
       } else {
-        session = await createSandboxForSession(sessionId);
+        session = createSandboxForSession(sessionId);
         setSession(sessionId, session);
       }
     } catch (err) {

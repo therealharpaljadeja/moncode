@@ -16,7 +16,7 @@ export async function GET(
     return NextResponse.json({ error: "no session" }, { status: 400 });
   }
   const session = getSession(sessionId);
-  if (!session || session.bootStatus !== "ready") {
+  if (!session || session.bootStatus !== "ready" || !session.sandbox) {
     return NextResponse.json({ error: "sandbox not ready" }, { status: 409 });
   }
 

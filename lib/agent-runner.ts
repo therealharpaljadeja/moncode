@@ -17,6 +17,9 @@ export async function* runAgentTurn(
     sessionId: session.agentSessionId,
   });
 
+  if (!session.sandbox) {
+    throw new Error("sandbox is not ready");
+  }
   const command = await session.sandbox.runCommand({
     cmd: "node",
     args: ["agent.mjs", payload],

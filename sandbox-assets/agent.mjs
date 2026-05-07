@@ -8,6 +8,17 @@
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
+// Diagnostic: log auth env presence so the host can see what's reaching the
+// sandbox. Logs key length, not value. Surfaces in chat as agent_stderr.
+{
+  const key = process.env.ANTHROPIC_API_KEY ?? "";
+  const oauth = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
+  process.stderr.write(
+    `agent.mjs: ANTHROPIC_API_KEY=${key ? `present (${key.length} chars, prefix ${key.slice(0, 7)})` : "MISSING"}; ` +
+      `CLAUDE_CODE_OAUTH_TOKEN=${oauth ? `present (${oauth.length} chars)` : "absent"}\n`,
+  );
+}
+
 const MONCODE_SYSTEM_NOTES = [
   "You are running inside Moncode, a sandboxed workspace for vibe-coding Monad dApps.",
   "The repo is a Next.js 15 + viem starter at /vercel/sandbox.",
