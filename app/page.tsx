@@ -63,6 +63,7 @@ export default function Page() {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [transcriptLoaded, setTranscriptLoaded] = useState(false);
 
   const [tab, setTab] = useState<Tab>("preview");
   const [tree, setTree] = useState<FileNode[]>([]);
@@ -137,6 +138,33 @@ export default function Page() {
   useEffect(() => {
     if (bootStatus === "ready") void refetchFiles();
   }, [bootStatus, refetchFiles]);
+
+  useEffect(() => {
+    if (bootStatus !== "ready" || transcriptLoaded) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/transcript");
+        if (!res.ok) return;
+        const data = (await res.json()) as { messages?: unknown[] };
+        if (cancelled || !Array.isArray(data.messages)) return;
+        setItems((prev) => {
+          let next = prev;
+          for (const m of data.messages as Array<Record<string, unknown>>) {
+            next = mergeSdkMessage(next, m);
+          }
+          return next;
+        });
+      } catch {
+        // best-effort; leave chat empty if transcript can't be fetched
+      } finally {
+        if (!cancelled) setTranscriptLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bootStatus, transcriptLoaded]);
 
   const openFile = useCallback(async (path: string) => {
     setActiveFile(path);
@@ -226,6 +254,7 @@ export default function Page() {
           send={send}
           busy={busy}
           bootStatus={bootStatus}
+          transcriptLoaded={transcriptLoaded}
         />
       </ResizablePanel>
       <ResizableHandle />
@@ -307,6 +336,11 @@ function mergeSdkMessage(
   }
   if (type === "user") {
     const inner = (msg.message ?? {}) as { content?: unknown };
+    // On-disk transcripts store literal user prompts as a plain string;
+    // streaming user events use an array of tool_result blocks.
+    if (typeof inner.content === "string") {
+      return [...prev, { kind: "user", text: inner.content }];
+    }
     const blocks = Array.isArray(inner.content) ? inner.content : [];
     const next = [...prev];
     for (const block of blocks as Array<Record<string, unknown>>) {
@@ -363,6 +397,7 @@ function ChatPane({
   send,
   busy,
   bootStatus,
+  transcriptLoaded,
 }: {
   items: ChatItem[];
   input: string;
@@ -370,18 +405,22 @@ function ChatPane({
   send: () => void;
   busy: boolean;
   bootStatus: BootStatus;
+  transcriptLoaded: boolean;
 }) {
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [items.length]);
 
+  const ready = bootStatus === "ready" && transcriptLoaded;
   const placeholder =
-    bootStatus === "ready"
-      ? "Build a Monad…"
-      : bootStatus === "failed"
-        ? "Sandbox failed to boot — refresh"
-        : "Spinning up workspace…";
+    bootStatus === "failed"
+      ? "Sandbox failed to boot — refresh"
+      : bootStatus !== "ready"
+        ? "Spinning up workspace…"
+        : !transcriptLoaded
+          ? "Loading conversation…"
+          : "Build a Monad…";
 
   return (
     <section className="flex h-full min-h-0 flex-col">
@@ -390,7 +429,12 @@ function ChatPane({
       </header>
       <ScrollArea className="flex-1 min-h-0">
         <div className="flex flex-col gap-3 p-4">
-          {items.length === 0 && (
+          {bootStatus === "ready" && !transcriptLoaded && (
+            <div className="text-xs text-muted-foreground">
+              Loading conversation…
+            </div>
+          )}
+          {ready && items.length === 0 && (
             <div className="text-xs text-muted-foreground">
               Describe a Monad dApp and the agent will build it. Files write
               into the sandbox and the preview reloads on the right.
@@ -420,12 +464,12 @@ function ChatPane({
           }}
           placeholder={placeholder}
           rows={2}
-          disabled={bootStatus !== "ready" || busy}
+          disabled={!ready || busy}
           className="flex-1 resize-none"
         />
         <Button
           type="submit"
-          disabled={bootStatus !== "ready" || busy || !input.trim()}
+          disabled={!ready || busy || !input.trim()}
         >
           {busy ? "…" : "Send"}
         </Button>

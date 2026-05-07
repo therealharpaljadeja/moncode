@@ -7,6 +7,14 @@ wallet, no deploys, no DB, no billing.** This validates the Vercel
 Sandbox + Claude Agent SDK + curated-skills loop end-to-end before we
 add any of those.
 
+## Status (2026-05-05)
+End-to-end loop is functionally working: page load boots a sandbox,
+chat runs the SDK in the sandbox, file edits land, preview iframe
+reflects them. UI rebuilt on shadcn primitives. Remaining v0 gaps:
+curated skills bundle (still cloning all of Monskills), starter
+hardening, multi-turn UX (interrupting / replying mid-task — see
+`Follow-ups discovered during build` below).
+
 ## Goal
 A developer runs `npm run dev` locally, opens `localhost:3000`, sees a
 Moncode shell with a chat sidebar and a right pane. First page load
@@ -62,26 +70,26 @@ package.json
 ```
 
 ## Sandbox bootstrap
-- [ ] `Sandbox.create({ name?, source: { type: 'git', url: <starter>, revision }, ports: [3000], env: { ANTHROPIC_API_KEY }, timeout: 45m })`.
-      Choose a Next.js + viem starter (TBD — Monskills' scaffold is the
-      candidate; otherwise a vanilla `create-next-app` + viem snippet).
-- [ ] Boot script (sequential `runCommand`s):
-  1. `npm install` (the starter's deps).
-  2. `npm i @anthropic-ai/claude-agent-sdk` in the project (so
+- [x] `Sandbox.create({ runtime: 'node22', ports: [3000], env: { ANTHROPIC_API_KEY }, timeout: 45m })`.
+      Starter is shipped *in this repo* under `sandbox-assets/starter/`
+      and uploaded via `writeFiles` (no git source). Hand-rolled minimal
+      Next.js scaffold; no viem yet.
+- [x] Boot script (sequential `runCommand`s):
+  1. `writeFiles` starter, `agent.mjs`, and `skills/moncode/SKILL.md`.
+  2. `npm install` (the starter's deps).
+  3. `npm i @anthropic-ai/claude-agent-sdk` in the project (so
      `agent.mjs` can `import` it).
-  3. `git clone https://github.com/therealharpaljadeja/monskills
+  4. `git clone https://github.com/therealharpaljadeja/monskills
      /vercel/sandbox/.claude-plugins/monskills` — the SDK only accepts
      `plugins: [{ type: 'local', path }]`, so we materialize the
      plugin on disk first.
-  4. `writeFiles` to drop `agent.mjs` and `skills/moncode/SKILL.md`
-     into the sandbox.
-  5. `npm run dev` with `{ detached: true }` on port 3000.
-- [ ] Poll `sandbox.domain(3000)` for HTTP 200 (or wait for the dev
-      server's "ready" line in `command.logs()`) before returning the
-      URL to the frontend.
-- [ ] Surface boot logs over the same SSE stream the chat uses, so the
-      user sees "Spinning up your workspace…" with line output instead
-      of a blank loader.
+  5. `npm run dev` with `{ detached: true }` on port 3000; dev-server
+     logs piped into the boot stream as `[dev] …`.
+- [x] Poll `sandbox.domain(3000)` for HTTP 2xx–4xx with a 5-min deadline
+      before returning the URL to the frontend.
+- [x] Surface boot logs over a dedicated SSE stream
+      (`/api/sandbox/stream`) so the user sees "Spinning up your
+      workspace…" with line output instead of a blank loader.
 
 ## `agent.mjs` — the in-sandbox runner
 A ~50-line Node script the backend invokes per chat message. Pseudocode:
@@ -133,66 +141,72 @@ Moncode the agent has no key. Curate:
       `wallet-integration`, frontend parts of `scaffold`. Generated
       dApps are shared with anyone — they need standard wallet-connect
       code, which these skills provide. Loaded via the plugin path.
+      Currently we clone the **whole** Monskills repo without curation —
+      the deploy-with-private-key skills are still on disk. Mitigation
+      lives in `agent.mjs`'s system-prompt note ("do not write or run
+      deploy scripts; use end-user wallet connect"). Real curation
+      deferred.
 - [ ] **Drop / rewrite**: developer-side deploy paths that use
       `PRIVATE_KEY` env (`vercel-deploy`, deploy scripts in `scaffold`,
       `wallet`'s dev-side flows). v0 has no deploy mechanism, so just
-      omit them. We do this by either (a) forking the Monskills repo
-      with deletions, or (b) copying only the safe skills into a new
-      `monskills-curated` plugin we ship in this repo. Decision below.
-- [ ] **Add `skills/moncode/SKILL.md`** at top priority (highest-
-      priority project skill). Content:
-  - Project conventions (TypeScript, Next.js, viem).
-  - Monad testnet chain id, RPC URL, Monadscan URL.
-  - "v0 has no deploy tool — generate contracts and a frontend, but do
-    not write or run deploy scripts. When the user asks to deploy,
-    explain that deployment is coming in a later version."
-  - "Generated dApps must use standard end-user wallet connect
-    (RainbowKit / ConnectKit / wagmi) — never assume a private key."
+      omit them. Not done yet — see above.
+- [x] **Add `skills/moncode/SKILL.md`** at top priority (highest-
+      priority project skill). Shipped in `sandbox-assets/skills/moncode/SKILL.md`
+      and dropped into the sandbox at `.claude/skills/moncode/SKILL.md`
+      during boot.
 - [ ] Pin curated set with a `skills-lock.json` so prompts are
       reproducible.
 
 ## Backend endpoints
-- [ ] `POST /api/sandbox` → ensures a sandbox exists for the session
+- [x] `POST /api/sandbox` → ensures a sandbox exists for the session
       cookie. Returns `{ sandboxUrl, status }`. Idempotent.
-- [ ] `POST /api/chat` (SSE) → body `{ message }`. Invokes
+- [x] `GET /api/sandbox/stream` (SSE) → boot-log + status events for
+      the right-pane "Spinning up…" view.
+- [x] `POST /api/chat` (SSE) → body `{ message }`. Invokes
       `runCommand({ cmd: 'node', args: ['agent.mjs', JSON.stringify({
       prompt, sessionId })] })` inside the sandbox, streams stdout via
       `command.logs()`, parses each line as `SDKMessage`, and forwards
       each as an SSE message.
-  - Track `sessionId`: capture from the first `system`/`init` message
-    on the first turn so we have it before the turn finishes; persist
-    on the `result` message in case it changes (it shouldn't).
-  - Turn is "done" on `type === "result"` — close the SSE stream.
-- [ ] `GET /api/files` → `sandbox.fs.readdir('/vercel/sandbox', {
-      recursive: true })`, filtered to skip `node_modules`, `.next`,
-      `.git`, `.claude-plugins`. Returns a tree.
-- [ ] `GET /api/files/[...path]` → `sandbox.fs.readFile(path, 'utf8')`.
-- [ ] No auth on any of these in v0; bind to `localhost` only.
+  - `sessionId` capture: from `system:init` and from the final
+    `result` message (lib/agent-runner.ts:82).
+  - Turn is "done" on `type === "result"` — server emits a `done` SSE
+    event and closes the stream.
+- [x] `GET /api/files` → recursive readdir over `/vercel/sandbox`,
+      filtered to skip `node_modules`, `.next`, `.git`,
+      `.claude-plugins`. Returns a tree.
+- [x] `GET /api/files/[...path]` → reads file contents from the
+      sandbox.
+- [x] No auth in v0; single in-memory session map keyed by cookie.
 
 ## Frontend layout
-- [ ] Single page, two columns:
-  - **Left (≈40%)**: chat. Message list + input box. Renders
-    `SDKMessage` events: `assistant` text blocks, `tool_use` cards
-    (collapsed by default, expandable to show tool name + params),
-    `tool_result` cards, `result` final answer.
-  - **Right (≈60%)**: tab switcher.
-    - **Preview**: `<iframe src={sandboxUrl}>` with a "Open in new tab"
-      button and a refresh button.
-    - **Files**: tree on the left of the right pane, viewer on the
-      right. Read-only Monaco or just `<pre>` for v0.
-- [ ] Boot state: while the sandbox is provisioning, show a status
-      panel in the right pane streaming the boot log.
-- [ ] After each chat turn ends (`result` event), refetch
-      `/api/files` so the tree reflects the agent's edits. Preview
-      iframe reloads automatically via Next dev-server HMR.
+- [x] Single page, resizable two-pane split (shadcn
+      `ResizablePanelGroup`, defaults 40/60):
+  - **Left**: chat. Renders `SDKMessage` events: `assistant` text
+    blocks, `tool_use` cards (collapsed by default, expandable to
+    show tool name + params + result), `result` final answer,
+    `error` cards.
+  - **Right**: shadcn `Tabs` switcher (`forceMount` so the iframe
+    survives tab switches).
+    - **Preview**: `<iframe src={sandboxUrl}>` with an "Open ↗"
+      button to the live URL.
+    - **Files**: nested resizable split — tree on the left, `<pre>`
+      viewer on the right. Read-only.
+- [x] Boot state: right pane swaps to a streaming boot-log panel
+      until `bootStatus === "ready"`.
+- [x] After each chat turn ends, the client refetches `/api/files`
+      and bumps an `iframeNonce` to force a preview reload (since
+      starter HMR isn't always reliable for new files).
+- [x] UI built on shadcn primitives (`Button`, `Textarea`, `Tabs`,
+      `ScrollArea`, `Resizable`, `Collapsible`, `Card`) on top of
+      Tailwind — replaces the inline-styled prototype.
 
 ## Local dev
-- [ ] `.env.local` with `ANTHROPIC_API_KEY`, `VERCEL_TEAM_ID`,
-      `VERCEL_PROJECT_ID`, `VERCEL_TOKEN`.
-- [ ] `npm run dev` starts the host on `localhost:3000`. First chat
-      message (or page load) triggers sandbox boot.
-- [ ] On server restart, the in-memory map clears — that's fine for
-      v0; the user just gets a fresh sandbox.
+- [x] `.env.example` lists `ANTHROPIC_API_KEY`, `VERCEL_TEAM_ID`,
+      `VERCEL_PROJECT_ID`, `VERCEL_TOKEN`, `MONCODE_MONSKILLS_GIT_URL`.
+- [x] `npm run dev` starts the host on `localhost:3000`. Page load
+      auto-triggers sandbox boot via `POST /api/sandbox`.
+- [x] On server restart, the in-memory map clears — fine for v0;
+      the user gets a fresh sandbox on next page load.
 
 ## SDK gotchas to bake in
 - **Default systemPrompt is minimal**, not Claude Code. Always pass
@@ -216,19 +230,78 @@ Moncode the agent has no key. Curate:
   v1) and the spawned Claude Code binary (child, runs the model loop).
 
 ## Open decisions
-- [ ] **Starter template URL**: pick one Next.js + viem + Monad-aware
-      starter and pin it. Candidates: a Monskills scaffold, or a
-      hand-rolled minimal one in this repo's `templates/`.
-- [ ] **Curated skills mechanism**: fork Monskills with deletions, or
-      ship a `monskills-curated` plugin in this repo that imports only
-      the safe skills? Forking is less code, our own bundle is more
-      hermetic. Default to our own bundle for v0.
-- [ ] **Sandbox lifetime**: extend to the 45-min Hobby cap on boot, or
-      lazy-extend on each chat message? Lazy is cheaper.
-- [ ] **One sandbox per cookie vs one per server process**: cookie is
-      slightly more code but lets you open two tabs without them
-      colliding. Default to per-process for v0 unless we decide
-      otherwise.
+- [x] **Starter template**: hand-rolled minimal Next.js scaffold in
+      `sandbox-assets/starter/`, uploaded via `writeFiles`. No viem
+      yet — agent installs what it needs per turn.
+- [ ] **Curated skills mechanism**: still cloning the full Monskills
+      repo. Need to either fork-with-deletions or ship a
+      `monskills-curated` plugin here. Default plan: our own bundle.
+- [x] **Sandbox lifetime**: 45-minute timeout set at `Sandbox.create`
+      (`FORTY_FIVE_MINUTES_MS` in `lib/bootstrap.ts`). No
+      lazy-extension on chat — simpler.
+- [x] **One sandbox per cookie**: implemented via a `moncode_session`
+      cookie + in-memory `Map<sessionId, Session>` (lib/session.ts,
+      lib/sandbox.ts). Two browser tabs share one sandbox per cookie.
+
+## Follow-ups discovered during build
+- [x] **Ongoing conversation, not one-shot turns.** Chat should be a
+      single continuous conversation, not a fresh `query()` per
+      message. Today each turn spawns a new `node agent.mjs` and we
+      stitch turns together by passing `resume: sessionId` — works,
+      but every turn pays cold-start cost and loses any in-flight
+      tool state. Move to a long-lived `query()` driven by
+      streaming-input mode (see interrupt item below — same
+      mechanism). Resumability across page reloads / future
+      multi-project switching: persist `sessionId` per project so the
+      user can leave and come back; `resume` reloads the transcript
+      from `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`
+      inside the sandbox. Multi-project UI is out of v0, but the
+      session-id plumbing should land now so v1 just adds the picker.
+      Refs: Agent SDK sessions / resume docs.
+      **Status:** resumability shipped (`lib/session-store.ts`,
+      `reattachSession` in `lib/bootstrap.ts`, `GET /api/transcript`,
+      and `app/page.tsx` rehydration). Survives page reload + `npm
+      run dev` restart; dies with the sandbox. Long-lived `query()` /
+      streaming-input mode still deferred — bundled with the
+      mid-task-interrupt item below.
+- [ ] **Todo tracking UI.** The SDK emits `TodoWrite` tool-use events
+      with a structured task list (pending / in_progress / completed).
+      Render an accordion above the chat input showing the current
+      list, collapsed by default, that expands to show per-task
+      status. Updates come from streaming `tool_use` blocks for the
+      `TodoWrite` tool — parse the input payload and replace local
+      state on each emit. Ref:
+      https://code.claude.com/docs/en/agent-sdk/todo-tracking
+- [ ] **Mid-task user input / interrupt.** Today every turn spawns a
+      fresh `node agent.mjs` with `prompt: string` (single-message
+      mode). To let the user reply while the agent is mid-task or to
+      interrupt, we need streaming-input mode (`prompt:
+      AsyncIterable<SDKUserMessage>`) — which requires a long-lived
+      agent process. Vercel Sandbox `runCommand` does **not** expose
+      writable stdin on a running command (confirmed against the SDK
+      reference), so the design will be: agent.mjs runs an HTTP server
+      on a second exposed port (e.g. 3001) holding the long-lived
+      `query()` iterable, with `POST /message`, `POST /interrupt`, and
+      `GET /events` (SSE). Next route proxies to it. Auth via a
+      per-sandbox shared secret in env. This is the same long-lived
+      process that powers the "ongoing conversation" item above —
+      build them together.
+- [ ] **Hydration warning on first load.** Symptom unclear; likely
+      either browser-extension attribute injection on `<body>`
+      (`suppressHydrationWarning` fix) or `react-resizable-panels` SSR
+      mismatch (gate the panel group on a "mounted" flag). Need exact
+      console message to pick.
+- [ ] **"Invalid API key · Fix external API key" path.** Surface the
+      Anthropic 401 cleanly in the chat stream instead of letting it
+      look like a generic chat error. Add a host-side preflight ping to
+      Anthropic before booting the sandbox so we fail fast with a
+      clearer message.
+- [ ] **Cross-platform `package-lock.json`.** Lockfile was first
+      generated on Linux during shadcn install and dropped the
+      `darwin-arm64` SWC native binary, breaking `next dev` on the
+      author's Mac. Fix on next regeneration: run install on each
+      target platform once or use `--include=optional` before
+      committing.
 
 ## Out of v0, queued for v1
 - Privy auth + per-user sandbox naming (`moncode-<userId>-<projectId>`).
