@@ -1,5 +1,15 @@
+import path from "path";
+import fs from "fs/promises";
 import { SANDBOX_CWD, Session } from "@/lib/sandbox";
 import { upsertStored } from "@/lib/session-store";
+
+let cachedAgentScript: Buffer | null = null;
+async function loadAgentScript(): Promise<Buffer> {
+  if (cachedAgentScript) return cachedAgentScript;
+  const abs = path.join(process.cwd(), "sandbox-assets", "agent.mjs");
+  cachedAgentScript = await fs.readFile(abs);
+  return cachedAgentScript;
+}
 
 export type AgentEvent =
   | { type: "sdk_message"; message: Record<string, unknown> }
@@ -20,6 +30,12 @@ export async function* runAgentTurn(
   if (!session.sandbox) {
     throw new Error("sandbox is not ready");
   }
+
+  // Re-upload agent.mjs each turn so reattached or pre-existing sandboxes
+  // pick up host-side changes without needing a fresh boot.
+  const script = await loadAgentScript();
+  await session.sandbox.writeFiles([{ path: "agent.mjs", content: script }]);
+
   const command = await session.sandbox.runCommand({
     cmd: "node",
     args: ["agent.mjs", payload],

@@ -46,7 +46,8 @@ type ChatItem =
       isError?: boolean;
     }
   | { kind: "result"; text: string }
-  | { kind: "error"; text: string };
+  | { kind: "error"; text: string }
+  | { kind: "stderr"; text: string };
 
 type TodoStatus = "pending" | "in_progress" | "completed";
 
@@ -345,6 +346,21 @@ function handleSseBlock(
       ...prev,
       { kind: "error", text: `agent exited with code ${code}` },
     ]);
+    return;
+  }
+  if (event === "agent_stderr") {
+    const text = typeof payload.data === "string" ? payload.data : "";
+    if (!text.trim()) return;
+    setItems((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      if (last && last.kind === "stderr") {
+        next[next.length - 1] = { kind: "stderr", text: last.text + text };
+      } else {
+        next.push({ kind: "stderr", text });
+      }
+      return next;
+    });
     return;
   }
   if (event === "error") {
@@ -658,12 +674,38 @@ function ChatBubble({ item }: { item: ChatItem }) {
   if (item.kind === "tool_use") {
     return <ToolUseCard item={item} />;
   }
+  if (item.kind === "stderr") {
+    return <StderrCard text={item.text} />;
+  }
   return (
     <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-destructive-foreground">
       <pre className="whitespace-pre-wrap break-words font-sans text-sm">
         {item.text}
       </pre>
     </div>
+  );
+}
+
+function StderrCard({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className="self-start max-w-[95%] rounded-lg border bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground"
+    >
+      <CollapsibleTrigger className="flex w-full items-center gap-1.5 text-left">
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+        )}
+        <span className="font-semibold">agent stderr</span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-1.5">
+        <pre className="whitespace-pre-wrap break-words font-mono">{text}</pre>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
