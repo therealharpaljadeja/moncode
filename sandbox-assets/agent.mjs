@@ -6,7 +6,27 @@
 // The host parses each line and forwards it to the browser over SSE. Keep
 // stdout clean — no incidental console.log calls.
 
+import { existsSync } from "node:fs";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+
+// The SDK's optional native deps include both glibc and musl Linux variants
+// and `npm i` inside the sandbox often installs both. The SDK probes the musl
+// path first; on a glibc sandbox that ELF can't be loaded (its interpreter
+// /lib/ld-musl-x86_64.so.1 is absent) and the spawn ENOENTs out as "binary
+// not found". Pin the right variant explicitly so the SDK doesn't guess.
+function pickClaudeExecutable() {
+  if (process.platform !== "linux" || process.arch !== "x64") return undefined;
+  const isMusl = existsSync("/lib/ld-musl-x86_64.so.1");
+  const pkg = isMusl
+    ? "@anthropic-ai/claude-agent-sdk-linux-x64-musl"
+    : "@anthropic-ai/claude-agent-sdk-linux-x64";
+  const path = `/vercel/sandbox/node_modules/${pkg}/claude`;
+  return existsSync(path) ? path : undefined;
+}
+const pathToClaudeCodeExecutable = pickClaudeExecutable();
+process.stderr.write(
+  `agent.mjs: claude binary = ${pathToClaudeCodeExecutable ?? "<sdk default>"}\n`,
+);
 
 // Diagnostic: log auth env presence so the host can see what's reaching the
 // sandbox. Logs key length, not value. Surfaces in chat as agent_stderr.
@@ -56,6 +76,7 @@ const q = query({
   options: {
     cwd: "/vercel/sandbox",
     continue: Boolean(sessionId),
+    pathToClaudeCodeExecutable,
     model: "claude-opus-4-6",
     effort: "medium",
     permissionMode: "bypassPermissions",
