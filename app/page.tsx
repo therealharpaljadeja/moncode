@@ -76,6 +76,11 @@ export default function Page() {
   const [postReturned, setPostReturned] = useState(false);
 
   const [items, setItems] = useState<ChatItem[]>([]);
+  // UUIDs of SDK messages already merged into `items`. Both the transcript
+  // load and the SSE stream can deliver the same message — most notably when
+  // `continue: true` makes the SDK replay prior user turns before the new
+  // one — so we dedupe by uuid instead of pushing blindly.
+  const seenUuidsRef = useRef<Set<string>>(new Set());
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -171,7 +176,7 @@ export default function Page() {
         setItems((prev) => {
           let next = prev;
           for (const m of messages) {
-            next = mergeSdkMessage(next, m);
+            next = mergeSdkMessage(next, m, seenUuidsRef.current);
           }
           return next;
         });
@@ -249,7 +254,7 @@ export default function Page() {
         while ((idx = buf.indexOf("\n\n")) >= 0) {
           const event = buf.slice(0, idx);
           buf = buf.slice(idx + 2);
-          handleSseBlock(event, setItems, setTodos);
+          handleSseBlock(event, setItems, setTodos, seenUuidsRef.current);
         }
       }
     } catch (err) {
@@ -309,6 +314,7 @@ function handleSseBlock(
   block: string,
   setItems: React.Dispatch<React.SetStateAction<ChatItem[]>>,
   setTodos: React.Dispatch<React.SetStateAction<TodoItem[]>>,
+  seenUuids: Set<string>,
 ) {
   let event = "message";
   let dataLine = "";
@@ -334,7 +340,7 @@ function handleSseBlock(
         setItems((prev) => [...prev, { kind: "error", text }]);
         return;
       }
-      setItems((prev) => mergeSdkMessage(prev, m));
+      setItems((prev) => mergeSdkMessage(prev, m, seenUuids));
       const newTodos = extractTodosFromMessage(m);
       if (newTodos) setTodos(newTodos);
     }
@@ -375,7 +381,14 @@ function handleSseBlock(
 function mergeSdkMessage(
   prev: ChatItem[],
   msg: Record<string, unknown>,
+  seenUuids: Set<string>,
 ): ChatItem[] {
+  if (msg.isReplay === true) return prev;
+  const uuid = typeof msg.uuid === "string" ? msg.uuid : null;
+  if (uuid) {
+    if (seenUuids.has(uuid)) return prev;
+    seenUuids.add(uuid);
+  }
   const type = msg.type;
   if (type === "assistant") {
     const inner = (msg.message ?? {}) as { content?: unknown };
