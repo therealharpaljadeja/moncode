@@ -265,10 +265,14 @@ export function createSandboxForSession(cookieSessionId: string): Session {
 
       appendBootLog(session, "Creating sandbox…");
       const { Sandbox } = await import("@vercel/sandbox");
+      const env: Record<string, string> = { ANTHROPIC_API_KEY: apiKey };
+      if (process.env.MONCODE_DEBUG) {
+        env.MONCODE_DEBUG = process.env.MONCODE_DEBUG;
+      }
       const sandbox = await Sandbox.create({
         runtime: "node22",
         ports: [APP_PORT],
-        env: { ANTHROPIC_API_KEY: apiKey },
+        env,
         timeout: FORTY_FIVE_MINUTES_MS,
       });
       session.sandbox = sandbox;
