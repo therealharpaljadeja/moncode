@@ -173,10 +173,13 @@ export default function Page() {
         const data = (await res.json()) as { messages?: unknown[] };
         if (cancelled || !Array.isArray(data.messages)) return;
         const messages = data.messages as Array<Record<string, unknown>>;
+        const accepted = messages.filter((m) =>
+          shouldMergeMessage(m, seenUuidsRef.current),
+        );
         setItems((prev) => {
           let next = prev;
-          for (const m of messages) {
-            next = mergeSdkMessage(next, m, seenUuidsRef.current);
+          for (const m of accepted) {
+            next = mergeSdkMessage(next, m);
           }
           return next;
         });
@@ -340,7 +343,8 @@ function handleSseBlock(
         setItems((prev) => [...prev, { kind: "error", text }]);
         return;
       }
-      setItems((prev) => mergeSdkMessage(prev, m, seenUuids));
+      if (!shouldMergeMessage(m, seenUuids)) return;
+      setItems((prev) => mergeSdkMessage(prev, m));
       const newTodos = extractTodosFromMessage(m);
       if (newTodos) setTodos(newTodos);
     }
@@ -378,17 +382,22 @@ function handleSseBlock(
   }
 }
 
+function shouldMergeMessage(
+  msg: Record<string, unknown>,
+  seenUuids: Set<string>,
+): boolean {
+  if (msg.isReplay === true) return false;
+  const uuid = typeof msg.uuid === "string" ? msg.uuid : null;
+  if (!uuid) return true;
+  if (seenUuids.has(uuid)) return false;
+  seenUuids.add(uuid);
+  return true;
+}
+
 function mergeSdkMessage(
   prev: ChatItem[],
   msg: Record<string, unknown>,
-  seenUuids: Set<string>,
 ): ChatItem[] {
-  if (msg.isReplay === true) return prev;
-  const uuid = typeof msg.uuid === "string" ? msg.uuid : null;
-  if (uuid) {
-    if (seenUuids.has(uuid)) return prev;
-    seenUuids.add(uuid);
-  }
   const type = msg.type;
   if (type === "assistant") {
     const inner = (msg.message ?? {}) as { content?: unknown };
