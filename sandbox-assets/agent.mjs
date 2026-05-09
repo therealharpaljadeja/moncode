@@ -9,6 +9,11 @@
 import { existsSync } from "node:fs";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
+const DEBUG = Boolean(process.env.MONCODE_DEBUG);
+const debug = (line) => {
+  if (DEBUG) process.stderr.write(line.endsWith("\n") ? line : line + "\n");
+};
+
 // The SDK's optional native deps include both glibc and musl Linux variants
 // and `npm i` inside the sandbox often installs both. The SDK probes the musl
 // path first; on a glibc sandbox that ELF can't be loaded (its interpreter
@@ -24,18 +29,16 @@ function pickClaudeExecutable() {
   return existsSync(path) ? path : undefined;
 }
 const pathToClaudeCodeExecutable = pickClaudeExecutable();
-process.stderr.write(
-  `agent.mjs: claude binary = ${pathToClaudeCodeExecutable ?? "<sdk default>"}\n`,
+debug(
+  `agent.mjs: claude binary = ${pathToClaudeCodeExecutable ?? "<sdk default>"}`,
 );
 
-// Diagnostic: log auth env presence so the host can see what's reaching the
-// sandbox. Logs key length, not value. Surfaces in chat as agent_stderr.
 {
   const key = process.env.ANTHROPIC_API_KEY ?? "";
   const oauth = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
-  process.stderr.write(
+  debug(
     `agent.mjs: ANTHROPIC_API_KEY=${key ? `present (${key.length} chars, prefix ${key.slice(0, 7)})` : "MISSING"}; ` +
-      `CLAUDE_CODE_OAUTH_TOKEN=${oauth ? `present (${oauth.length} chars)` : "absent"}\n`,
+      `CLAUDE_CODE_OAUTH_TOKEN=${oauth ? `present (${oauth.length} chars)` : "absent"}`,
   );
 }
 
