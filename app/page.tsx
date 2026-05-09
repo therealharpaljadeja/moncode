@@ -418,15 +418,18 @@ function mergeSdkMessage(
   }
   if (type === "user") {
     const inner = (msg.message ?? {}) as { content?: unknown };
-    // On-disk transcripts store literal user prompts as a plain string;
-    // streaming user events use an array of tool_result blocks.
+    // User content can be a plain string (older transcripts), or an array of
+    // blocks: text blocks for prompts, tool_result blocks for tool feedback.
     if (typeof inner.content === "string") {
       return [...prev, { kind: "user", text: inner.content }];
     }
     const blocks = Array.isArray(inner.content) ? inner.content : [];
     const next = [...prev];
+    let promptText = "";
     for (const block of blocks as Array<Record<string, unknown>>) {
-      if (block.type === "tool_result") {
+      if (block.type === "text" && typeof block.text === "string") {
+        promptText += (promptText ? "\n" : "") + block.text;
+      } else if (block.type === "tool_result") {
         const idx = lastIndexWhere(next, (it) => it.kind === "tool_use");
         const text = stringifyToolResult(block.content);
         if (idx >= 0) {
@@ -439,6 +442,7 @@ function mergeSdkMessage(
         }
       }
     }
+    if (promptText) next.push({ kind: "user", text: promptText });
     return next;
   }
   if (type === "result") {
