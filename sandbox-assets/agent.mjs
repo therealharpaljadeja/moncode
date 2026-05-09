@@ -47,11 +47,17 @@ if (typeof prompt !== "string" || prompt.length === 0) {
   process.exit(2);
 }
 
+// `continue: true` picks up the most recent conversation in cwd. We use it for
+// every turn after the first instead of `resume: <sid>` — in stream-json
+// one-shot mode, resuming a session that already has a `result` message exits
+// without emitting any new messages, so follow-up turns produced no output.
 const q = query({
   prompt,
   options: {
     cwd: "/vercel/sandbox",
-    resume: sessionId || undefined,
+    continue: Boolean(sessionId),
+    model: "claude-opus-4-6",
+    effort: "medium",
     permissionMode: "bypassPermissions",
     settingSources: ["user", "project"],
     systemPrompt: {

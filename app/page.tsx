@@ -10,7 +10,10 @@ import {
 import {
   ChevronRight,
   ChevronDown,
+  Circle,
+  CircleCheck,
   ExternalLink,
+  Loader2,
   RefreshCw,
 } from "lucide-react";
 
@@ -45,6 +48,14 @@ type ChatItem =
   | { kind: "result"; text: string }
   | { kind: "error"; text: string };
 
+type TodoStatus = "pending" | "in_progress" | "completed";
+
+type TodoItem = {
+  content: string;
+  status: TodoStatus;
+  activeForm?: string;
+};
+
 type FileNode = {
   name: string;
   path: string;
@@ -64,6 +75,7 @@ export default function Page() {
   const [postReturned, setPostReturned] = useState(false);
 
   const [items, setItems] = useState<ChatItem[]>([]);
+  const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [transcriptLoaded, setTranscriptLoaded] = useState(false);
@@ -154,13 +166,20 @@ export default function Page() {
         if (!res.ok) return;
         const data = (await res.json()) as { messages?: unknown[] };
         if (cancelled || !Array.isArray(data.messages)) return;
+        const messages = data.messages as Array<Record<string, unknown>>;
         setItems((prev) => {
           let next = prev;
-          for (const m of data.messages as Array<Record<string, unknown>>) {
+          for (const m of messages) {
             next = mergeSdkMessage(next, m);
           }
           return next;
         });
+        let latestTodos: TodoItem[] | null = null;
+        for (const m of messages) {
+          const t = extractTodosFromMessage(m);
+          if (t) latestTodos = t;
+        }
+        if (latestTodos) setTodos(latestTodos);
       } catch {
         // best-effort; leave chat empty if transcript can't be fetched
       } finally {
@@ -229,7 +248,7 @@ export default function Page() {
         while ((idx = buf.indexOf("\n\n")) >= 0) {
           const event = buf.slice(0, idx);
           buf = buf.slice(idx + 2);
-          handleSseBlock(event, setItems);
+          handleSseBlock(event, setItems, setTodos);
         }
       }
     } catch (err) {
@@ -255,6 +274,7 @@ export default function Page() {
       <ResizablePanel defaultSize={40} minSize={28} className="min-w-0">
         <ChatPane
           items={items}
+          todos={todos}
           input={input}
           setInput={setInput}
           send={send}
@@ -287,6 +307,7 @@ export default function Page() {
 function handleSseBlock(
   block: string,
   setItems: React.Dispatch<React.SetStateAction<ChatItem[]>>,
+  setTodos: React.Dispatch<React.SetStateAction<TodoItem[]>>,
 ) {
   let event = "message";
   let dataLine = "";
@@ -305,8 +326,25 @@ function handleSseBlock(
   if (event === "sdk_message") {
     const msg = payload.message;
     if (msg && typeof msg === "object") {
-      setItems((prev) => mergeSdkMessage(prev, msg as Record<string, unknown>));
+      const m = msg as Record<string, unknown>;
+      if (m.type === "moncode_error") {
+        const text =
+          typeof m.error === "string" ? m.error : "agent crashed";
+        setItems((prev) => [...prev, { kind: "error", text }]);
+        return;
+      }
+      setItems((prev) => mergeSdkMessage(prev, m));
+      const newTodos = extractTodosFromMessage(m);
+      if (newTodos) setTodos(newTodos);
     }
+    return;
+  }
+  if (event === "agent_exit") {
+    const code = typeof payload.exitCode === "number" ? payload.exitCode : -1;
+    setItems((prev) => [
+      ...prev,
+      { kind: "error", text: `agent exited with code ${code}` },
+    ]);
     return;
   }
   if (event === "error") {
@@ -373,6 +411,41 @@ function mergeSdkMessage(
   return prev;
 }
 
+function extractTodosFromMessage(
+  msg: Record<string, unknown>,
+): TodoItem[] | null {
+  if (msg.type !== "assistant") return null;
+  const inner = (msg.message ?? {}) as { content?: unknown };
+  if (!Array.isArray(inner.content)) return null;
+  let latest: TodoItem[] | null = null;
+  for (const block of inner.content as Array<Record<string, unknown>>) {
+    if (block.type !== "tool_use" || block.name !== "TodoWrite") continue;
+    const input = block.input as { todos?: unknown } | undefined;
+    if (!input || !Array.isArray(input.todos)) continue;
+    const todos: TodoItem[] = [];
+    for (const raw of input.todos as unknown[]) {
+      if (!raw || typeof raw !== "object") continue;
+      const o = raw as Record<string, unknown>;
+      const status = o.status;
+      if (
+        typeof o.content !== "string" ||
+        (status !== "pending" &&
+          status !== "in_progress" &&
+          status !== "completed")
+      ) {
+        continue;
+      }
+      todos.push({
+        content: o.content,
+        status,
+        activeForm: typeof o.activeForm === "string" ? o.activeForm : undefined,
+      });
+    }
+    latest = todos;
+  }
+  return latest;
+}
+
 function lastIndexWhere<T>(arr: T[], pred: (x: T) => boolean): number {
   for (let i = arr.length - 1; i >= 0; i -= 1) {
     if (pred(arr[i])) return i;
@@ -398,6 +471,7 @@ function stringifyToolResult(content: unknown): string {
 
 function ChatPane({
   items,
+  todos,
   input,
   setInput,
   send,
@@ -406,6 +480,7 @@ function ChatPane({
   transcriptLoaded,
 }: {
   items: ChatItem[];
+  todos: TodoItem[];
   input: string;
   setInput: (v: string) => void;
   send: () => void;
@@ -428,6 +503,10 @@ function ChatPane({
           ? "Loading conversation…"
           : "Build a Monad…";
 
+  const visibleItems = items.filter(
+    (item) => !(item.kind === "tool_use" && item.name === "TodoWrite"),
+  );
+
   return (
     <section className="flex h-full min-h-0 flex-col">
       <header className="flex h-12 shrink-0 items-center border-b px-4 font-semibold">
@@ -440,18 +519,19 @@ function ChatPane({
               Loading conversation…
             </div>
           )}
-          {ready && items.length === 0 && (
+          {ready && visibleItems.length === 0 && (
             <div className="text-xs text-muted-foreground">
               Describe a Monad dApp and the agent will build it. Files write
               into the sandbox and the preview reloads on the right.
             </div>
           )}
-          {items.map((item, i) => (
+          {visibleItems.map((item, i) => (
             <ChatBubble key={i} item={item} />
           ))}
           <div ref={endRef} />
         </div>
       </ScrollArea>
+      {todos.length > 0 && <TodoAccordion todos={todos} />}
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -481,6 +561,78 @@ function ChatPane({
         </Button>
       </form>
     </section>
+  );
+}
+
+function TodoAccordion({ todos }: { todos: TodoItem[] }) {
+  const [open, setOpen] = useState(false);
+  const inProgress = todos.filter((t) => t.status === "in_progress").length;
+  const pending = todos.filter((t) => t.status === "pending").length;
+  const completed = todos.filter((t) => t.status === "completed").length;
+
+  const summary =
+    completed === todos.length
+      ? "all done"
+      : [
+          inProgress > 0 ? `${inProgress} in progress` : null,
+          pending > 0 ? `${pending} pending` : null,
+          completed > 0 ? `${completed} done` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className="shrink-0 border-t bg-muted/30"
+    >
+      <CollapsibleTrigger className="flex w-full items-center gap-2 px-4 py-2 text-xs hover:bg-muted/60">
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+        )}
+        <span className="font-medium">Tasks · {todos.length}</span>
+        <span className="text-muted-foreground">{summary}</span>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <ul className="space-y-1 px-4 pb-3 pt-1">
+          {todos.map((t, i) => (
+            <li key={i} className="flex items-start gap-2 text-xs">
+              <TodoStatusIcon status={t.status} />
+              <span
+                className={cn(
+                  "leading-snug",
+                  t.status === "completed" &&
+                    "text-muted-foreground line-through",
+                )}
+              >
+                {t.status === "in_progress" && t.activeForm
+                  ? t.activeForm
+                  : t.content}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+function TodoStatusIcon({ status }: { status: TodoStatus }) {
+  if (status === "completed") {
+    return (
+      <CircleCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-500" />
+    );
+  }
+  if (status === "in_progress") {
+    return (
+      <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+    );
+  }
+  return (
+    <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
   );
 }
 
