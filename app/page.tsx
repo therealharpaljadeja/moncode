@@ -480,10 +480,16 @@ function mergeSdkMessage(
       return [...prev, { kind: "user", text: inner.content }];
     }
     const blocks = Array.isArray(inner.content) ? inner.content : [];
+    // Synthetic user messages (e.g. Skill body injections, system reminders)
+    // and messages parented to a tool call are SDK-internal — never real
+    // user input. Process tool_result blocks but drop their text blocks.
+    const isSynthetic =
+      msg.subtype === "synthetic" || Boolean(msg.parent_tool_use_id);
     const next = [...prev];
     let promptText = "";
     for (const block of blocks as Array<Record<string, unknown>>) {
       if (block.type === "text" && typeof block.text === "string") {
+        if (isSynthetic) continue;
         promptText += (promptText ? "\n" : "") + block.text;
       } else if (block.type === "tool_result") {
         const idx = lastIndexWhere(next, (it) => it.kind === "tool_use");
