@@ -157,7 +157,7 @@ const getHighlighter = (
 
   const highlighterPromise = createHighlighter({
     langs: [language],
-    themes: ["github-light", "github-dark"],
+    themes: ["dracula"],
   });
 
   highlighterCache.set(language, highlighterPromise);
@@ -213,8 +213,8 @@ export const highlightCode = (
       const result = highlighter.codeToTokens(code, {
         lang: langToUse,
         themes: {
-          dark: "github-dark",
-          light: "github-light",
+          dark: "dracula",
+          light: "dracula",
         },
       });
 
