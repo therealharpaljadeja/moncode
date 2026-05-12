@@ -6,6 +6,7 @@ export type StoredSession = {
   sandboxId: string;
   agentSessionId: string | null;
   createdAt: number;
+  title: string | null;
 };
 
 type StoreFile = { version: 1; sessions: Record<string, StoredSession> };
@@ -63,6 +64,8 @@ export function upsertStored(
           ? patch.agentSessionId
           : (prev?.agentSessionId ?? null),
       createdAt: prev?.createdAt ?? patch.createdAt ?? Date.now(),
+      title:
+        patch.title !== undefined ? patch.title : (prev?.title ?? null),
     };
     if (!merged.sandboxId) return;
     const next: StoreFile = {

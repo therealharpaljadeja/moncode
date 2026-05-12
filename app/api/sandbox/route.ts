@@ -5,6 +5,7 @@ import {
   createSandboxForSession,
   reattachSession,
 } from "@/lib/bootstrap";
+import { getStored } from "@/lib/session-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,10 +33,12 @@ export async function POST() {
     }
   }
 
+  const stored = await getStored(sessionId);
   return NextResponse.json({
     status: session.bootStatus,
     sandboxUrl: session.bootStatus === "ready" ? session.sandboxUrl : null,
     bootError: session.bootError ?? null,
+    title: stored?.title ?? null,
   });
 }
 
@@ -45,9 +48,11 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ status: "uninitialized" });
   }
+  const stored = await getStored(sessionId);
   return NextResponse.json({
     status: session.bootStatus,
     sandboxUrl: session.bootStatus === "ready" ? session.sandboxUrl : null,
     bootError: session.bootError ?? null,
+    title: stored?.title ?? null,
   });
 }

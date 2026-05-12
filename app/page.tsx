@@ -147,12 +147,22 @@ export default function Page() {
   const [activeContent, setActiveContent] = useState<string>("");
   const [iframeNonce, setIframeNonce] = useState(0);
 
+  // Title is the per-project label shown in the chat header. Null = show
+  // "Moncode" fallback. `animatingTitle` is set briefly the moment the
+  // backend returns a freshly-generated title, which triggers the
+  // typewriter reveal; saved titles loaded on reload skip the animation.
+  const [title, setTitle] = useState<string | null>(null);
+  const [animatingTitle, setAnimatingTitle] = useState<string | null>(null);
+
   const ensureSandbox = useCallback(async () => {
     setBootStatus("pending");
     setPostReturned(false);
     try {
       const res = await fetch("/api/sandbox", { method: "POST" });
       const data = await res.json();
+      if (typeof data.title === "string" && data.title.length > 0) {
+        setTitle(data.title);
+      }
       if (data.status === "ready") {
         setBootStatus("ready");
         setSandboxUrl(data.sandboxUrl);
@@ -165,6 +175,26 @@ export default function Page() {
       setBootError(err instanceof Error ? err.message : String(err));
     } finally {
       setPostReturned(true);
+    }
+  }, []);
+
+  const generateTitle = useCallback(async (prompt: string) => {
+    try {
+      const res = await fetch("/api/title", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { title?: string; cached?: boolean };
+      if (!data.title) return;
+      if (data.cached) {
+        setTitle(data.title);
+      } else {
+        setAnimatingTitle(data.title);
+      }
+    } catch {
+      // silent — header just keeps "Moncode"
     }
   }, []);
 
@@ -282,7 +312,14 @@ export default function Page() {
   const send = useCallback(async () => {
     const text = input.trim();
     if (!text || busy) return;
-    setItems((prev) => [...prev, { kind: "user", text }]);
+    let firstUserPrompt = false;
+    setItems((prev) => {
+      if (!prev.some((it) => it.kind === "user")) firstUserPrompt = true;
+      return [...prev, { kind: "user", text }];
+    });
+    if (firstUserPrompt && !title) {
+      void generateTitle(text);
+    }
     setInput("");
     setBusy(true);
 
@@ -328,7 +365,7 @@ export default function Page() {
       void refetchFiles();
       setIframeNonce((n) => n + 1);
     }
-  }, [busy, input, refetchFiles]);
+  }, [busy, input, refetchFiles, title, generateTitle]);
 
   return (
     <ResizablePanelGroup
@@ -345,6 +382,14 @@ export default function Page() {
           busy={busy}
           bootStatus={bootStatus}
           transcriptLoaded={transcriptLoaded}
+          title={title}
+          animatingTitle={animatingTitle}
+          onTitleAnimationDone={() => {
+            if (animatingTitle) {
+              setTitle(animatingTitle);
+              setAnimatingTitle(null);
+            }
+          }}
         />
       </ResizablePanel>
       <ResizableHandle />
@@ -573,6 +618,61 @@ function stringifyToolResult(content: unknown): string {
   return JSON.stringify(content);
 }
 
+function useTypewriter(target: string | null, speed = 35): string {
+  const [partial, setPartial] = useState("");
+  useEffect(() => {
+    if (!target) {
+      setPartial("");
+      return;
+    }
+    setPartial("");
+    let i = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = () => {
+      i += 1;
+      setPartial(target.slice(0, i));
+      if (i < target.length) {
+        timer = setTimeout(tick, speed);
+      }
+    };
+    timer = setTimeout(tick, speed);
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [target, speed]);
+  return partial;
+}
+
+function ChatTitle({
+  title,
+  animatingTitle,
+  onAnimationDone,
+}: {
+  title: string | null;
+  animatingTitle: string | null;
+  onAnimationDone: () => void;
+}) {
+  const typed = useTypewriter(animatingTitle);
+  const isAnimating = Boolean(animatingTitle);
+  const done = isAnimating && typed === animatingTitle;
+
+  useEffect(() => {
+    if (done) onAnimationDone();
+  }, [done, onAnimationDone]);
+
+  const text = isAnimating ? typed : (title ?? "Moncode");
+  return (
+    <span className="truncate">
+      {text}
+      {isAnimating && !done && (
+        <span className="ml-0.5 inline-block w-[1px] animate-pulse bg-foreground align-middle">
+          &nbsp;
+        </span>
+      )}
+    </span>
+  );
+}
+
 function ChatPane({
   items,
   todos,
@@ -582,6 +682,9 @@ function ChatPane({
   busy,
   bootStatus,
   transcriptLoaded,
+  title,
+  animatingTitle,
+  onTitleAnimationDone,
 }: {
   items: ChatItem[];
   todos: TodoItem[];
@@ -591,6 +694,9 @@ function ChatPane({
   busy: boolean;
   bootStatus: BootStatus;
   transcriptLoaded: boolean;
+  title: string | null;
+  animatingTitle: string | null;
+  onTitleAnimationDone: () => void;
 }) {
   const ready = bootStatus === "ready" && transcriptLoaded;
   const placeholder =
@@ -616,7 +722,11 @@ function ChatPane({
   return (
     <section className="flex h-full min-h-0 flex-col">
       <header className="flex h-12 shrink-0 items-center border-b px-4 font-semibold">
-        Moncode
+        <ChatTitle
+          title={title}
+          animatingTitle={animatingTitle}
+          onAnimationDone={onTitleAnimationDone}
+        />
       </header>
       <Conversation className="flex-1 min-h-0">
         <ConversationContent className="gap-4">
