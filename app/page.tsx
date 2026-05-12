@@ -13,12 +13,12 @@ import {
   Circle,
   CircleCheck,
   ExternalLink,
+  FileIcon,
   Loader2,
   RefreshCw,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -31,6 +31,61 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from "@/components/ai-elements/conversation";
+import {
+  Message,
+  MessageContent,
+  MessageResponse,
+} from "@/components/ai-elements/message";
+import {
+  PromptInput,
+  PromptInputBody,
+  PromptInputFooter,
+  PromptInputSubmit,
+  PromptInputTextarea,
+  type PromptInputMessage,
+} from "@/components/ai-elements/prompt-input";
+import {
+  Task,
+  TaskContent,
+  TaskItem,
+  TaskTrigger,
+} from "@/components/ai-elements/task";
+import {
+  Tool,
+  ToolContent,
+  ToolHeader,
+  ToolInput,
+  ToolOutput,
+} from "@/components/ai-elements/tool";
+import {
+  FileTree as ElementsFileTree,
+  FileTreeFile,
+  FileTreeFolder,
+} from "@/components/ai-elements/file-tree";
+import {
+  CodeBlock,
+  CodeBlockActions,
+  CodeBlockCopyButton,
+  CodeBlockFilename,
+  CodeBlockHeader,
+  CodeBlockTitle,
+} from "@/components/ai-elements/code-block";
+import {
+  WebPreview,
+  WebPreviewBody,
+  WebPreviewNavigation,
+  WebPreviewNavigationButton,
+  WebPreviewUrl,
+} from "@/components/ai-elements/web-preview";
+import { DotmSquare5 } from "@/components/ui/dotm-square-5";
+import type { ToolUIPart } from "ai";
+import type { BundledLanguage } from "shiki";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 type BootStatus = "idle" | "pending" | "ready" | "failed";
@@ -300,6 +355,7 @@ export default function Page() {
           bootError={bootError}
           sandboxUrl={sandboxUrl}
           iframeNonce={iframeNonce}
+          reloadPreview={() => setIframeNonce((n) => n + 1)}
           tab={tab}
           setTab={setTab}
           tree={tree}
@@ -530,11 +586,6 @@ function ChatPane({
   bootStatus: BootStatus;
   transcriptLoaded: boolean;
 }) {
-  const endRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [items.length]);
-
   const ready = bootStatus === "ready" && transcriptLoaded;
   const placeholder =
     bootStatus === "failed"
@@ -549,13 +600,20 @@ function ChatPane({
     (item) => !(item.kind === "tool_use" && item.name === "TodoWrite"),
   );
 
+  const handleSubmit = useCallback(
+    (_message: PromptInputMessage) => {
+      send();
+    },
+    [send],
+  );
+
   return (
     <section className="flex h-full min-h-0 flex-col">
       <header className="flex h-12 shrink-0 items-center border-b px-4 font-semibold">
         Moncode
       </header>
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="flex flex-col gap-3 p-4">
+      <Conversation className="flex-1 min-h-0">
+        <ConversationContent className="gap-4">
           {bootStatus === "ready" && !transcriptLoaded && (
             <div className="text-xs text-muted-foreground">
               Loading conversation…
@@ -568,46 +626,36 @@ function ChatPane({
             </div>
           )}
           {visibleItems.map((item, i) => (
-            <ChatBubble key={i} item={item} />
+            <ChatItemRow key={i} item={item} />
           ))}
-          <div ref={endRef} />
-        </div>
-      </ScrollArea>
+        </ConversationContent>
+        <ConversationScrollButton />
+      </Conversation>
       {todos.length > 0 && <TodoAccordion todos={todos} />}
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          send();
-        }}
-        className="flex shrink-0 items-end gap-2 border-t p-3"
-      >
-        <Textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-          placeholder={placeholder}
-          rows={2}
-          disabled={!ready || busy}
-          className="flex-1 resize-none"
-        />
-        <Button
-          type="submit"
-          disabled={!ready || busy || !input.trim()}
-        >
-          {busy ? "…" : "Send"}
-        </Button>
-      </form>
+      <div className="shrink-0 border-t p-3">
+        <PromptInput onSubmit={handleSubmit}>
+          <PromptInputBody>
+            <PromptInputTextarea
+              value={input}
+              onChange={(e) => setInput(e.currentTarget.value)}
+              placeholder={placeholder}
+              disabled={!ready || busy}
+            />
+          </PromptInputBody>
+          <PromptInputFooter>
+            <div />
+            <PromptInputSubmit
+              status={busy ? "submitted" : undefined}
+              disabled={!ready || busy || !input.trim()}
+            />
+          </PromptInputFooter>
+        </PromptInput>
+      </div>
     </section>
   );
 }
 
 function TodoAccordion({ todos }: { todos: TodoItem[] }) {
-  const [open, setOpen] = useState(false);
   const inProgress = todos.filter((t) => t.status === "in_progress").length;
   const pending = todos.filter((t) => t.status === "pending").length;
   const completed = todos.filter((t) => t.status === "completed").length;
@@ -624,41 +672,30 @@ function TodoAccordion({ todos }: { todos: TodoItem[] }) {
           .join(" · ");
 
   return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpen}
-      className="shrink-0 border-t bg-muted/30"
-    >
-      <CollapsibleTrigger className="flex w-full items-center gap-2 px-4 py-2 text-xs hover:bg-muted/60">
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-        )}
-        <span className="font-medium">Tasks · {todos.length}</span>
-        <span className="text-muted-foreground">{summary}</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <ul className="space-y-1 px-4 pb-3 pt-1">
+    <div className="shrink-0 border-t bg-muted/30 px-4 py-2">
+      <Task defaultOpen={false}>
+        <TaskTrigger title={`Tasks · ${todos.length} — ${summary}`} />
+        <TaskContent>
           {todos.map((t, i) => (
-            <li key={i} className="flex items-start gap-2 text-xs">
+            <TaskItem
+              key={i}
+              className="flex items-start gap-2 text-xs leading-snug"
+            >
               <TodoStatusIcon status={t.status} />
               <span
                 className={cn(
-                  "leading-snug",
-                  t.status === "completed" &&
-                    "text-muted-foreground line-through",
+                  t.status === "completed" && "line-through",
                 )}
               >
                 {t.status === "in_progress" && t.activeForm
                   ? t.activeForm
                   : t.content}
               </span>
-            </li>
+            </TaskItem>
           ))}
-        </ul>
-      </CollapsibleContent>
-    </Collapsible>
+        </TaskContent>
+      </Task>
+    </div>
   );
 }
 
@@ -678,23 +715,25 @@ function TodoStatusIcon({ status }: { status: TodoStatus }) {
   );
 }
 
-function ChatBubble({ item }: { item: ChatItem }) {
+function ChatItemRow({ item }: { item: ChatItem }) {
   if (item.kind === "user") {
     return (
-      <div className="self-end max-w-[85%] rounded-lg border bg-secondary px-3 py-2">
-        <pre className="whitespace-pre-wrap break-words font-sans text-sm">
-          {item.text}
-        </pre>
-      </div>
+      <Message from="user">
+        <MessageContent>
+          <pre className="whitespace-pre-wrap break-words font-sans text-sm">
+            {item.text}
+          </pre>
+        </MessageContent>
+      </Message>
     );
   }
   if (item.kind === "assistant" || item.kind === "result") {
     return (
-      <div className="self-start max-w-[95%] rounded-lg border bg-card px-3 py-2">
-        <pre className="whitespace-pre-wrap break-words font-sans text-sm">
-          {item.text}
-        </pre>
-      </div>
+      <Message from="assistant">
+        <MessageContent>
+          <MessageResponse>{item.text}</MessageResponse>
+        </MessageContent>
+      </Message>
     );
   }
   if (item.kind === "tool_use") {
@@ -740,33 +779,31 @@ function ToolUseCard({
 }: {
   item: Extract<ChatItem, { kind: "tool_use" }>;
 }) {
-  const [open, setOpen] = useState(false);
+  const state: ToolUIPart["state"] =
+    item.result === undefined
+      ? "input-available"
+      : item.isError
+        ? "output-error"
+        : "output-available";
+
+  const output =
+    item.result !== undefined && !item.isError ? (
+      <pre className="whitespace-pre-wrap break-words p-3 font-mono text-xs">
+        {item.result}
+      </pre>
+    ) : undefined;
+
   return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpen}
-      className="self-start max-w-[95%] rounded-lg border bg-card px-3 py-1.5 text-xs"
-    >
-      <CollapsibleTrigger className="flex w-full items-center gap-1.5 text-left">
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-        )}
-        <span className="font-semibold">{item.name}</span>
-        {item.isError && <span className="text-destructive">error</span>}
-      </CollapsibleTrigger>
-      <CollapsibleContent className="mt-1.5 space-y-1.5">
-        <pre className="whitespace-pre-wrap break-words text-muted-foreground">
-          {JSON.stringify(item.input, null, 2)}
-        </pre>
-        {item.result !== undefined && (
-          <pre className="whitespace-pre-wrap break-words border-t pt-1.5 text-muted-foreground">
-            {item.result}
-          </pre>
-        )}
-      </CollapsibleContent>
-    </Collapsible>
+    <Tool defaultOpen={false}>
+      <ToolHeader type={`tool-${item.name}`} state={state} title={item.name} />
+      <ToolContent>
+        <ToolInput input={item.input} />
+        <ToolOutput
+          output={output}
+          errorText={item.isError ? item.result : undefined}
+        />
+      </ToolContent>
+    </Tool>
   );
 }
 
@@ -776,6 +813,7 @@ function RightPane({
   bootError,
   sandboxUrl,
   iframeNonce,
+  reloadPreview,
   tab,
   setTab,
   tree,
@@ -789,6 +827,7 @@ function RightPane({
   bootError: string | null;
   sandboxUrl: string | null;
   iframeNonce: number;
+  reloadPreview: () => void;
   tab: Tab;
   setTab: (t: Tab) => void;
   tree: FileNode[];
@@ -812,13 +851,6 @@ function RightPane({
           <TabsTrigger value="files">Files</TabsTrigger>
         </TabsList>
         <div className="flex-1" />
-        {tab === "preview" && sandboxUrl && (
-          <Button asChild variant="outline" size="sm">
-            <a href={sandboxUrl} target="_blank" rel="noreferrer">
-              Open <ExternalLink className="ml-1 h-3.5 w-3.5" />
-            </a>
-          </Button>
-        )}
         {tab === "files" && (
           <Button variant="outline" size="sm" onClick={refetchFiles}>
             <RefreshCw className="mr-1 h-3.5 w-3.5" /> Refresh
@@ -832,7 +864,11 @@ function RightPane({
           "mt-0 flex-1 min-h-0 data-[state=inactive]:hidden",
         )}
       >
-        <PreviewIframe url={sandboxUrl} nonce={iframeNonce} />
+        <PreviewIframe
+          url={sandboxUrl}
+          nonce={iframeNonce}
+          onReload={reloadPreview}
+        />
       </TabsContent>
       <TabsContent
         value="files"
@@ -855,27 +891,49 @@ function RightPane({
 function PreviewIframe({
   url,
   nonce,
+  onReload,
 }: {
   url: string | null;
   nonce: number;
+  onReload: () => void;
 }) {
   const src = useMemo(() => {
-    if (!url) return null;
+    if (!url) return undefined;
     return nonce > 0 ? `${url}?_=${nonce}` : url;
   }, [url, nonce]);
-  if (!src) {
+
+  if (!url) {
     return (
       <div className="p-4 text-sm text-muted-foreground">
         No preview URL yet.
       </div>
     );
   }
+
   return (
-    <iframe
-      key={src}
-      src={src}
-      className="block h-full w-full border-0 bg-white"
-    />
+    <WebPreview
+      key={url}
+      defaultUrl={url}
+      className="h-full rounded-none border-0 bg-transparent"
+    >
+      <WebPreviewNavigation>
+        <WebPreviewNavigationButton tooltip="Reload" onClick={onReload}>
+          <RefreshCw className="h-4 w-4" />
+        </WebPreviewNavigationButton>
+        <WebPreviewUrl value={url} readOnly />
+        <Button asChild variant="ghost" size="icon-sm">
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Open in new tab"
+          >
+            <ExternalLink className="h-4 w-4" />
+          </a>
+        </Button>
+      </WebPreviewNavigation>
+      <WebPreviewBody src={src} className="bg-white" />
+    </WebPreview>
   );
 }
 
@@ -890,12 +948,25 @@ function FilesView({
   activeContent: string;
   openFile: (p: string) => void;
 }) {
+  const rootPaths = useMemo(
+    () =>
+      new Set(tree.filter((n) => n.type === "dir").map((n) => n.path)),
+    [tree],
+  );
+
   return (
     <ResizablePanelGroup direction="horizontal" className="h-full">
       <ResizablePanel defaultSize={28} minSize={15} className="min-w-0">
         <ScrollArea className="h-full">
           <div className="p-2">
-            <FileTree nodes={tree} active={activeFile} onPick={openFile} />
+            <ElementsFileTree
+              defaultExpanded={rootPaths}
+              selectedPath={activeFile ?? undefined}
+              onSelect={openFile}
+              className="rounded-none border-0 bg-transparent"
+            >
+              {renderFileNodes(tree)}
+            </ElementsFileTree>
           </div>
         </ScrollArea>
       </ResizablePanel>
@@ -904,9 +975,20 @@ function FilesView({
         <ScrollArea className="h-full">
           <div className="p-3">
             {activeFile ? (
-              <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed">
-                {activeContent}
-              </pre>
+              <CodeBlock
+                code={activeContent}
+                language={languageForPath(activeFile)}
+              >
+                <CodeBlockHeader>
+                  <CodeBlockTitle>
+                    <FileIcon size={14} />
+                    <CodeBlockFilename>{activeFile}</CodeBlockFilename>
+                  </CodeBlockTitle>
+                  <CodeBlockActions>
+                    <CodeBlockCopyButton />
+                  </CodeBlockActions>
+                </CodeBlockHeader>
+              </CodeBlock>
             ) : (
               <div className="text-sm text-muted-foreground">
                 Select a file.
@@ -919,55 +1001,49 @@ function FilesView({
   );
 }
 
-function FileTree({
-  nodes,
-  active,
-  onPick,
-  depth = 0,
-}: {
-  nodes: FileNode[];
-  active: string | null;
-  onPick: (p: string) => void;
-  depth?: number;
-}) {
-  return (
-    <ul
-      className={cn(
-        "list-none m-0 p-0",
-        depth > 0 && "pl-3",
-      )}
-    >
-      {nodes.map((node) => (
-        <li key={node.path}>
-          {node.type === "dir" ? (
-            <details open={depth < 1}>
-              <summary className="cursor-pointer rounded px-1 py-0.5 text-sm hover:bg-accent">
-                {node.name}
-              </summary>
-              {node.children && node.children.length > 0 && (
-                <FileTree
-                  nodes={node.children}
-                  active={active}
-                  onPick={onPick}
-                  depth={depth + 1}
-                />
-              )}
-            </details>
-          ) : (
-            <div
-              onClick={() => onPick(node.path)}
-              className={cn(
-                "cursor-pointer rounded px-1 py-0.5 text-sm hover:bg-accent",
-                active === node.path && "bg-accent text-accent-foreground",
-              )}
-            >
-              {node.name}
-            </div>
-          )}
-        </li>
-      ))}
-    </ul>
+function renderFileNodes(nodes: FileNode[]): ReactNode {
+  return nodes.map((node) =>
+    node.type === "dir" ? (
+      <FileTreeFolder key={node.path} path={node.path} name={node.name}>
+        {node.children && node.children.length > 0
+          ? renderFileNodes(node.children)
+          : null}
+      </FileTreeFolder>
+    ) : (
+      <FileTreeFile key={node.path} path={node.path} name={node.name} />
+    ),
   );
+}
+
+const LANGUAGE_BY_EXT: Record<string, BundledLanguage> = {
+  ts: "typescript",
+  tsx: "tsx",
+  js: "javascript",
+  jsx: "jsx",
+  mjs: "javascript",
+  cjs: "javascript",
+  json: "json",
+  jsonc: "json",
+  md: "markdown",
+  mdx: "mdx",
+  css: "css",
+  scss: "scss",
+  html: "html",
+  htm: "html",
+  sol: "solidity",
+  yml: "yaml",
+  yaml: "yaml",
+  toml: "toml",
+  sh: "bash",
+  bash: "bash",
+  py: "python",
+  rs: "rust",
+  go: "go",
+};
+
+function languageForPath(path: string): BundledLanguage {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return LANGUAGE_BY_EXT[ext] ?? "text";
 }
 
 function BootPanel({
@@ -979,30 +1055,30 @@ function BootPanel({
   error: string | null;
   status: BootStatus;
 }) {
-  const endRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [log.length]);
+  const latest = log.length > 0 ? log[log.length - 1] : null;
+  const statusLine =
+    status === "failed"
+      ? "Boot failed"
+      : latest && latest.trim().length > 0
+        ? latest.trim()
+        : "Connecting to sandbox…";
+
   return (
-    <section className="flex h-full min-h-0 flex-col gap-3 p-4">
-      <header className="shrink-0 font-semibold">
-        {status === "failed" ? "Boot failed" : "Spinning up your workspace…"}
-      </header>
-      <div className="flex-1 min-h-0 rounded-md border bg-muted/40">
-        <ScrollArea className="h-full">
-          <div className="p-3 font-mono text-xs">
-            {log.length === 0 ? (
-              <span className="text-muted-foreground">connecting…</span>
-            ) : (
-              log.map((l, i) => <div key={i}>{l}</div>)
-            )}
-            <div ref={endRef} />
-          </div>
-        </ScrollArea>
+    <section className="flex h-full min-h-0 flex-col items-center justify-center gap-6 p-8 text-center">
+      <DotmSquare5
+        ariaLabel="Sandbox booting"
+        size={64}
+        dotSize={8}
+        className="text-primary"
+      />
+      <div className="space-y-2">
+        <p className="font-mono text-xs text-muted-foreground break-all max-w-md">
+          {statusLine}
+        </p>
+        {error && (
+          <p className="text-xs text-destructive">Error: {error}</p>
+        )}
       </div>
-      {error && (
-        <div className="shrink-0 text-xs text-destructive">Error: {error}</div>
-      )}
     </section>
   );
 }
