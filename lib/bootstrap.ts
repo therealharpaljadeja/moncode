@@ -6,6 +6,7 @@ import {
   SANDBOX_CWD,
   Session,
   appendBootLog,
+  setBootPhase,
 } from "@/lib/sandbox";
 import {
   getStored,
@@ -149,8 +150,6 @@ async function pollReadiness(session: Session, url: string): Promise<void> {
 
 async function bootSandbox(session: Session, sandbox: Sandbox): Promise<void> {
   try {
-    appendBootLog(session, "Spinning up your workspace…");
-
     const starterFiles = await collectStarterFiles();
     const agentScript = await readAssetBuffer("agent.mjs");
     const moncodeSkill = await readAssetBuffer(
@@ -159,10 +158,10 @@ async function bootSandbox(session: Session, sandbox: Sandbox): Promise<void> {
       "SKILL.md",
     );
 
-    appendBootLog(
-      session,
-      `Writing ${starterFiles.length} starter files into ${SANDBOX_CWD}…`,
-    );
+    setBootPhase(session, {
+      key: "writing-files",
+      label: "Writing starter files…",
+    });
     await sandbox.writeFiles(
       starterFiles.map((f) => ({
         path: f.sandboxPath,
@@ -181,13 +180,25 @@ async function bootSandbox(session: Session, sandbox: Sandbox): Promise<void> {
       },
     ]);
 
+    setBootPhase(session, {
+      key: "installing-deps",
+      label: "Installing project dependencies…",
+    });
     await runStep(session, sandbox, "npm install", "npm", ["install"]);
 
+    setBootPhase(session, {
+      key: "installing-sdk",
+      label: "Installing Claude Agent SDK…",
+    });
     await runStep(session, sandbox, "install Claude Agent SDK", "npm", [
       "i",
       "@anthropic-ai/claude-agent-sdk",
     ]);
 
+    setBootPhase(session, {
+      key: "cloning-skills",
+      label: "Fetching Monad skills…",
+    });
     await runStep(session, sandbox, "clone Monskills", "git", [
       "clone",
       "--depth",
@@ -196,7 +207,10 @@ async function bootSandbox(session: Session, sandbox: Sandbox): Promise<void> {
       MONSKILLS_PATH,
     ]);
 
-    appendBootLog(session, "Starting dev server…");
+    setBootPhase(session, {
+      key: "starting-server",
+      label: "Starting the dev server…",
+    });
     const dev = await sandbox.runCommand({
       cmd: "npm",
       args: ["run", "dev"],
@@ -204,8 +218,8 @@ async function bootSandbox(session: Session, sandbox: Sandbox): Promise<void> {
       detached: true,
     });
 
-    // Pipe dev-server logs into the boot stream in the background so the user
-    // sees the "ready" line and any compile errors. We don't await this.
+    // Keep piping dev-server output into the debug buffer so failures can be
+    // diagnosed via bootLog, but the user only sees the phase label.
     void (async () => {
       try {
         for await (const log of dev.logs()) {
@@ -221,10 +235,14 @@ async function bootSandbox(session: Session, sandbox: Sandbox): Promise<void> {
 
     const url = sandbox.domain(APP_PORT);
     session.sandboxUrl = url;
+    setBootPhase(session, {
+      key: "waiting-preview",
+      label: "Waiting for the preview to come up…",
+    });
     await pollReadiness(session, url);
 
     session.bootStatus = "ready";
-    appendBootLog(session, "Workspace ready.");
+    setBootPhase(session, { key: "ready", label: "Workspace ready." });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     session.bootStatus = "failed";
@@ -255,15 +273,18 @@ export function createSandboxForSession(cookieSessionId: string): Session {
     bootStatus: "pending",
     bootLog: [],
     bootListeners: new Set(),
+    bootPhase: { key: "preflight", label: "Validating your API key…" },
+    bootPhaseListeners: new Set(),
   };
 
   session.bootPromise = (async () => {
     try {
-      appendBootLog(session, "Validating ANTHROPIC_API_KEY…");
       await preflightAnthropicKey(apiKey);
-      appendBootLog(session, "API key OK.");
 
-      appendBootLog(session, "Creating sandbox…");
+      setBootPhase(session, {
+        key: "creating-sandbox",
+        label: "Spinning up a fresh sandbox…",
+      });
       const { Sandbox } = await import("@vercel/sandbox");
       const env: Record<string, string> = { ANTHROPIC_API_KEY: apiKey };
       if (process.env.MONCODE_DEBUG) {
@@ -326,6 +347,8 @@ export async function reattachSession(
       bootStatus: "ready",
       bootLog: ["Reconnected to existing workspace."],
       bootListeners: new Set(),
+      bootPhase: { key: "ready", label: "Workspace ready." },
+      bootPhaseListeners: new Set(),
     };
   } catch {
     await removeStored(cookieSessionId).catch(() => {});

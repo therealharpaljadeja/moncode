@@ -121,9 +121,11 @@ type FileNode = {
 
 type Tab = "preview" | "files";
 
+type BootPhase = { key: string; label: string };
+
 export default function Page() {
   const [bootStatus, setBootStatus] = useState<BootStatus>("idle");
-  const [bootLog, setBootLog] = useState<string[]>([]);
+  const [bootPhase, setBootPhase] = useState<BootPhase | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
   const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
   // True once POST /api/sandbox has responded — at that point the cookie is
@@ -205,10 +207,16 @@ export default function Page() {
   useEffect(() => {
     if (!postReturned || bootStatus !== "pending") return;
     const es = new EventSource("/api/sandbox/stream");
-    es.addEventListener("log", (ev) => {
+    es.addEventListener("phase", (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data);
-        setBootLog((prev) => [...prev, data.line]);
+        if (
+          data &&
+          typeof data.key === "string" &&
+          typeof data.label === "string"
+        ) {
+          setBootPhase({ key: data.key, label: data.label });
+        }
       } catch {
         // ignore
       }
@@ -396,7 +404,7 @@ export default function Page() {
       <ResizablePanel defaultSize={60} minSize={30} className="min-w-0">
         <RightPane
           bootStatus={bootStatus}
-          bootLog={bootLog}
+          bootPhase={bootPhase}
           bootError={bootError}
           sandboxUrl={sandboxUrl}
           iframeNonce={iframeNonce}
@@ -925,7 +933,7 @@ function ToolUseCard({
 
 function RightPane({
   bootStatus,
-  bootLog,
+  bootPhase,
   bootError,
   sandboxUrl,
   iframeNonce,
@@ -939,7 +947,7 @@ function RightPane({
   refetchFiles,
 }: {
   bootStatus: BootStatus;
-  bootLog: string[];
+  bootPhase: BootPhase | null;
   bootError: string | null;
   sandboxUrl: string | null;
   iframeNonce: number;
@@ -953,7 +961,9 @@ function RightPane({
   refetchFiles: () => void;
 }) {
   if (bootStatus !== "ready") {
-    return <BootPanel log={bootLog} error={bootError} status={bootStatus} />;
+    return (
+      <BootPanel phase={bootPhase} error={bootError} status={bootStatus} />
+    );
   }
   return (
     <Tabs
@@ -1163,34 +1173,29 @@ function languageForPath(path: string): BundledLanguage {
 }
 
 function BootPanel({
-  log,
+  phase,
   error,
   status,
 }: {
-  log: string[];
+  phase: BootPhase | null;
   error: string | null;
   status: BootStatus;
 }) {
-  const latest = log.length > 0 ? log[log.length - 1] : null;
   const statusLine =
     status === "failed"
       ? "Boot failed"
-      : latest && latest.trim().length > 0
-        ? latest.trim()
-        : "Connecting to sandbox…";
+      : phase?.label || "Connecting to sandbox…";
 
   return (
-    <section className="flex h-full min-h-0 flex-col items-center justify-center gap-6 p-8 text-center">
+    <section className="flex h-full min-h-0 flex-col items-center justify-center gap-4 p-8 text-center">
       <DotmSquare5
         ariaLabel="Sandbox booting"
-        size={64}
-        dotSize={8}
+        size={28}
+        dotSize={3}
         className="text-primary"
       />
       <div className="space-y-2">
-        <p className="font-mono text-xs text-muted-foreground break-all max-w-md">
-          {statusLine}
-        </p>
+        <p className="text-xs text-muted-foreground max-w-md">{statusLine}</p>
         {error && (
           <p className="text-xs text-destructive">Error: {error}</p>
         )}

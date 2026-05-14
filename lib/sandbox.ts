@@ -2,6 +2,13 @@ import type { Sandbox } from "@vercel/sandbox";
 
 export type BootListener = (line: string) => void;
 
+export type BootPhase = {
+  key: string;
+  label: string;
+};
+
+export type BootPhaseListener = (phase: BootPhase) => void;
+
 export type Session = {
   cookieSessionId: string;
   // null while bootPromise is still awaiting Sandbox.create. Becomes non-null
@@ -11,8 +18,12 @@ export type Session = {
   agentSessionId: string | null;
   bootPromise: Promise<void>;
   bootStatus: "pending" | "ready" | "failed";
+  // Raw command output — kept as a debug buffer, not surfaced to the UI.
   bootLog: string[];
   bootListeners: Set<BootListener>;
+  // High-level, user-facing milestone. The UI renders only this.
+  bootPhase: BootPhase | null;
+  bootPhaseListeners: Set<BootPhaseListener>;
   bootError?: string;
 };
 
@@ -50,6 +61,17 @@ export function appendBootLog(session: Session, line: string): void {
   for (const listener of session.bootListeners) {
     try {
       listener(line);
+    } catch {
+      // ignore listener failures
+    }
+  }
+}
+
+export function setBootPhase(session: Session, phase: BootPhase): void {
+  session.bootPhase = phase;
+  for (const listener of session.bootPhaseListeners) {
+    try {
+      listener(phase);
     } catch {
       // ignore listener failures
     }
