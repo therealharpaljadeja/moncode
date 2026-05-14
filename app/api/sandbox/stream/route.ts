@@ -32,18 +32,18 @@ export async function GET() {
         }
       };
 
-      // Replay buffered log first.
-      for (const line of session.bootLog) {
-        safeEnqueue(sse("log", { line }));
+      // Replay current phase so a late subscriber catches up immediately.
+      if (session.bootPhase) {
+        safeEnqueue(sse("phase", session.bootPhase));
       }
 
-      const listener = (line: string) => {
-        safeEnqueue(sse("log", { line }));
+      const phaseListener = (phase: { key: string; label: string }) => {
+        safeEnqueue(sse("phase", phase));
       };
-      session.bootListeners.add(listener);
+      session.bootPhaseListeners.add(phaseListener);
 
       const finalize = () => {
-        session.bootListeners.delete(listener);
+        session.bootPhaseListeners.delete(phaseListener);
         safeEnqueue(
           sse("status", {
             status: session.bootStatus,
