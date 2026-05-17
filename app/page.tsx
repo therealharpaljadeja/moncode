@@ -16,6 +16,7 @@ import {
   FileIcon,
   Loader2,
   RefreshCw,
+  Sparkles,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -123,6 +124,24 @@ type Tab = "preview" | "files";
 
 type BootPhase = { key: string; label: string };
 
+const REACT_PROMPT_SHORTCUTS = [
+  {
+    label: "Scaffold React + Tailwind",
+    prompt:
+      "Create a React app with TypeScript and Tailwind, then wire a basic home page.",
+  },
+  {
+    label: "Add Router Pages",
+    prompt:
+      "Set up React Router with a dashboard, settings, and a not-found route.",
+  },
+  {
+    label: "Generate UI Primitives",
+    prompt:
+      "Generate reusable UI primitives and refactor duplicated styles into shared components.",
+  },
+] as const;
+
 export default function Page() {
   const [bootStatus, setBootStatus] = useState<BootStatus>("idle");
   const [bootPhase, setBootPhase] = useState<BootPhase | null>(null);
@@ -141,6 +160,7 @@ export default function Page() {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [activePrompt, setActivePrompt] = useState<string | null>(null);
   const [transcriptLoaded, setTranscriptLoaded] = useState(false);
 
   const [tab, setTab] = useState<Tab>("preview");
@@ -317,14 +337,15 @@ export default function Page() {
     }
   }, []);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
+  const send = useCallback(async (overrideText?: string) => {
+    const text = (overrideText ?? input).trim();
     if (!text || busy) return;
     let firstUserPrompt = false;
     setItems((prev) => {
       if (!prev.some((it) => it.kind === "user")) firstUserPrompt = true;
       return [...prev, { kind: "user", text }];
     });
+    setActivePrompt(text);
     if (firstUserPrompt && !title) {
       void generateTitle(text);
     }
@@ -370,6 +391,7 @@ export default function Page() {
       ]);
     } finally {
       setBusy(false);
+      setActivePrompt(null);
       void refetchFiles();
       setIframeNonce((n) => n + 1);
     }
@@ -388,6 +410,7 @@ export default function Page() {
           setInput={setInput}
           send={send}
           busy={busy}
+          activePrompt={activePrompt}
           bootStatus={bootStatus}
           transcriptLoaded={transcriptLoaded}
           title={title}
@@ -688,6 +711,7 @@ function ChatPane({
   setInput,
   send,
   busy,
+  activePrompt,
   bootStatus,
   transcriptLoaded,
   title,
@@ -698,8 +722,9 @@ function ChatPane({
   todos: TodoItem[];
   input: string;
   setInput: (v: string) => void;
-  send: () => void;
+  send: (overrideText?: string) => Promise<void>;
   busy: boolean;
+  activePrompt: string | null;
   bootStatus: BootStatus;
   transcriptLoaded: boolean;
   title: string | null;
@@ -714,7 +739,7 @@ function ChatPane({
         ? "Spinning up workspace…"
         : !transcriptLoaded
           ? "Loading conversation…"
-          : "Build a Monad…";
+          : "Ask Moncode to build, fix bugs, or explore";
 
   const visibleItems = items.filter(
     (item) => !(item.kind === "tool_use" && item.name === "TodoWrite"),
@@ -722,7 +747,14 @@ function ChatPane({
 
   const handleSubmit = useCallback(
     (_message: PromptInputMessage) => {
-      send();
+      void send();
+    },
+    [send],
+  );
+
+  const runShortcut = useCallback(
+    (prompt: string) => {
+      void send(prompt);
     },
     [send],
   );
@@ -738,6 +770,19 @@ function ChatPane({
       </header>
       <Conversation className="flex-1 min-h-0">
         <ConversationContent className="gap-4">
+          {busy && activePrompt && (
+            <div className="sticky top-3 z-20 -mb-1 max-w-full">
+              <div className="inline-flex max-w-full items-center gap-2 rounded-full border bg-background/95 px-3 py-1 text-xs shadow-sm backdrop-blur">
+                <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-primary" />
+                <span className="shrink-0 font-medium text-foreground">
+                  Running prompt
+                </span>
+                <span className="truncate text-muted-foreground">
+                  {activePrompt}
+                </span>
+              </div>
+            </div>
+          )}
           {bootStatus === "ready" && !transcriptLoaded && (
             <div className="text-xs text-muted-foreground">
               Loading conversation…
@@ -745,8 +790,8 @@ function ChatPane({
           )}
           {ready && visibleItems.length === 0 && (
             <div className="text-xs text-muted-foreground">
-              Describe a Monad dApp and the agent will build it. Files write
-              into the sandbox and the preview reloads on the right.
+              Ask Moncode to create or improve your React app. Files write into
+              the sandbox and the preview reloads on the right.
             </div>
           )}
           {visibleItems.map((item, i) => (
@@ -757,23 +802,47 @@ function ChatPane({
       </Conversation>
       {todos.length > 0 && <TodoAccordion todos={todos} />}
       <div className="shrink-0 border-t p-3">
-        <PromptInput onSubmit={handleSubmit}>
-          <PromptInputBody>
-            <PromptInputTextarea
-              value={input}
-              onChange={(e) => setInput(e.currentTarget.value)}
-              placeholder={placeholder}
-              disabled={!ready || busy}
-            />
-          </PromptInputBody>
-          <PromptInputFooter>
-            <div />
-            <PromptInputSubmit
-              status={busy ? "submitted" : undefined}
-              disabled={!ready || busy || !input.trim()}
-            />
-          </PromptInputFooter>
-        </PromptInput>
+        <div className="mx-auto flex w-full max-w-2xl flex-col gap-2">
+          <div className="px-1 text-[11px] text-muted-foreground">
+            workspace/main
+          </div>
+          <PromptInput
+            onSubmit={handleSubmit}
+            className="[&_[data-slot=input-group]]:rounded-2xl [&_[data-slot=input-group]]:border-border/70 [&_[data-slot=input-group]]:bg-card/70 [&_[data-slot=input-group]]:shadow-sm"
+          >
+            <PromptInputBody>
+              <PromptInputTextarea
+                value={input}
+                onChange={(e) => setInput(e.currentTarget.value)}
+                placeholder={placeholder}
+                disabled={!ready || busy}
+              />
+            </PromptInputBody>
+            <PromptInputFooter className="border-t border-border/60 pt-2">
+              <div />
+              <PromptInputSubmit
+                status={busy ? "submitted" : undefined}
+                disabled={!ready || busy || !input.trim()}
+              />
+            </PromptInputFooter>
+          </PromptInput>
+          <div className="flex flex-wrap gap-2">
+            {REACT_PROMPT_SHORTCUTS.map((shortcut) => (
+              <Button
+                key={shortcut.label}
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="h-7 rounded-full px-3 text-xs"
+                disabled={!ready || busy}
+                onClick={() => runShortcut(shortcut.prompt)}
+              >
+                <Sparkles className="mr-1 h-3.5 w-3.5" />
+                {shortcut.label}
+              </Button>
+            ))}
+          </div>
+        </div>
       </div>
     </section>
   );
