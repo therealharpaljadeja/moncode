@@ -14,8 +14,10 @@ import {
   CircleCheck,
   ExternalLink,
   FileIcon,
+  ListOrdered,
   Loader2,
   RefreshCw,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -123,6 +125,11 @@ type Tab = "preview" | "files";
 
 type BootPhase = { key: string; label: string };
 
+type QueuedPrompt = {
+  id: string;
+  text: string;
+};
+
 export default function Page() {
   const [bootStatus, setBootStatus] = useState<BootStatus>("idle");
   const [bootPhase, setBootPhase] = useState<BootPhase | null>(null);
@@ -141,7 +148,10 @@ export default function Page() {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [promptQueue, setPromptQueue] = useState<QueuedPrompt[]>([]);
   const [transcriptLoaded, setTranscriptLoaded] = useState(false);
+  const processingQueueRef = useRef(false);
+  const sendInFlightRef = useRef(false);
 
   const [tab, setTab] = useState<Tab>("preview");
   const [tree, setTree] = useState<FileNode[]>([]);
@@ -317,63 +327,103 @@ export default function Page() {
     }
   }, []);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
-    if (!text || busy) return;
-    let firstUserPrompt = false;
-    setItems((prev) => {
-      if (!prev.some((it) => it.kind === "user")) firstUserPrompt = true;
-      return [...prev, { kind: "user", text }];
-    });
-    if (firstUserPrompt && !title) {
-      void generateTitle(text);
-    }
-    setInput("");
-    setBusy(true);
+  const sendPrompt = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed || sendInFlightRef.current) return;
+      sendInFlightRef.current = true;
 
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+      let firstUserPrompt = false;
+      setItems((prev) => {
+        if (!prev.some((it) => it.kind === "user")) firstUserPrompt = true;
+        return [...prev, { kind: "user", text: trimmed }];
       });
-      if (!res.ok || !res.body) {
-        const err = await res.text().catch(() => "");
+      if (firstUserPrompt && !title) {
+        void generateTitle(trimmed);
+      }
+      setBusy(true);
+
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: trimmed }),
+        });
+        if (!res.ok || !res.body) {
+          const err = await res.text().catch(() => "");
+          setItems((prev) => [
+            ...prev,
+            { kind: "error", text: err || `HTTP ${res.status}` },
+          ]);
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf("\n\n")) >= 0) {
+            const event = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+            handleSseBlock(event, setItems, setTodos, seenUuidsRef.current);
+          }
+        }
+      } catch (err) {
         setItems((prev) => [
           ...prev,
-          { kind: "error", text: err || `HTTP ${res.status}` },
+          {
+            kind: "error",
+            text: err instanceof Error ? err.message : String(err),
+          },
         ]);
-        return;
+      } finally {
+        sendInFlightRef.current = false;
+        setBusy(false);
+        void refetchFiles();
+        setIframeNonce((n) => n + 1);
       }
+    },
+    [refetchFiles, title, generateTitle],
+  );
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let idx;
-        while ((idx = buf.indexOf("\n\n")) >= 0) {
-          const event = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          handleSseBlock(event, setItems, setTodos, seenUuidsRef.current);
-        }
-      }
-    } catch (err) {
-      setItems((prev) => [
-        ...prev,
-        {
-          kind: "error",
-          text: err instanceof Error ? err.message : String(err),
-        },
-      ]);
-    } finally {
-      setBusy(false);
-      void refetchFiles();
-      setIframeNonce((n) => n + 1);
+  const enqueuePrompt = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setPromptQueue((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), text: trimmed },
+    ]);
+  }, []);
+
+  const removeQueuedPrompt = useCallback((id: string) => {
+    setPromptQueue((prev) => prev.filter((p) => p.id !== id));
+  }, []);
+
+  const submit = useCallback(() => {
+    const text = input.trim();
+    if (!text) return;
+    setInput("");
+    if (busy) {
+      enqueuePrompt(text);
+    } else {
+      void sendPrompt(text);
     }
-  }, [busy, input, refetchFiles, title, generateTitle]);
+  }, [busy, input, enqueuePrompt, sendPrompt]);
+
+  useEffect(() => {
+    if (busy || promptQueue.length === 0 || processingQueueRef.current) return;
+
+    const [next, ...rest] = promptQueue;
+    processingQueueRef.current = true;
+    setPromptQueue(rest);
+    void sendPrompt(next.text).finally(() => {
+      processingQueueRef.current = false;
+    });
+  }, [busy, promptQueue, sendPrompt]);
 
   return (
     <ResizablePanelGroup
@@ -386,8 +436,10 @@ export default function Page() {
           todos={todos}
           input={input}
           setInput={setInput}
-          send={send}
+          submit={submit}
           busy={busy}
+          promptQueue={promptQueue}
+          onRemoveQueued={removeQueuedPrompt}
           bootStatus={bootStatus}
           transcriptLoaded={transcriptLoaded}
           title={title}
@@ -686,8 +738,10 @@ function ChatPane({
   todos,
   input,
   setInput,
-  send,
+  submit,
   busy,
+  promptQueue,
+  onRemoveQueued,
   bootStatus,
   transcriptLoaded,
   title,
@@ -698,8 +752,10 @@ function ChatPane({
   todos: TodoItem[];
   input: string;
   setInput: (v: string) => void;
-  send: () => void;
+  submit: () => void;
   busy: boolean;
+  promptQueue: QueuedPrompt[];
+  onRemoveQueued: (id: string) => void;
   bootStatus: BootStatus;
   transcriptLoaded: boolean;
   title: string | null;
@@ -714,7 +770,9 @@ function ChatPane({
         ? "Spinning up workspace…"
         : !transcriptLoaded
           ? "Loading conversation…"
-          : "Build a Monad…";
+          : busy
+            ? "Queue another prompt…"
+            : "Build a Monad…";
 
   const visibleItems = items.filter(
     (item) => !(item.kind === "tool_use" && item.name === "TodoWrite"),
@@ -722,9 +780,9 @@ function ChatPane({
 
   const handleSubmit = useCallback(
     (_message: PromptInputMessage) => {
-      send();
+      submit();
     },
-    [send],
+    [submit],
   );
 
   return (
@@ -756,26 +814,68 @@ function ChatPane({
         <ConversationScrollButton />
       </Conversation>
       {todos.length > 0 && <TodoAccordion todos={todos} />}
-      <div className="shrink-0 border-t p-3">
+      {promptQueue.length > 0 && (
+        <PromptQueueBar queue={promptQueue} onRemove={onRemoveQueued} />
+      )}
+      <div className="shrink-0 p-3">
         <PromptInput onSubmit={handleSubmit}>
           <PromptInputBody>
             <PromptInputTextarea
               value={input}
               onChange={(e) => setInput(e.currentTarget.value)}
               placeholder={placeholder}
-              disabled={!ready || busy}
+              disabled={!ready}
             />
           </PromptInputBody>
           <PromptInputFooter>
             <div />
-            <PromptInputSubmit
-              status={busy ? "submitted" : undefined}
-              disabled={!ready || busy || !input.trim()}
-            />
+            <PromptInputSubmit disabled={!ready || !input.trim()} />
           </PromptInputFooter>
         </PromptInput>
       </div>
     </section>
+  );
+}
+
+function PromptQueueBar({
+  queue,
+  onRemove,
+}: {
+  queue: QueuedPrompt[];
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className="shrink-0 px-3 pt-3">
+      <div className="rounded-md border bg-muted/20">
+        <div className="flex items-center justify-between px-3 py-2 text-muted-foreground text-sm">
+          <div className="flex items-center gap-2">
+            <ListOrdered className="size-4 shrink-0" />
+            <span>Queue</span>
+          </div>
+          <span className="tabular-nums">{queue.length}</span>
+        </div>
+        <ul className="flex max-h-48 flex-col overflow-y-auto px-1 pb-1">
+          {queue.map((item, index) => (
+            <li
+              key={item.id}
+              className="group flex items-start gap-2 rounded-md px-2 py-1.5"
+            >
+              <button
+                type="button"
+                onClick={() => onRemove(item.id)}
+                className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:text-destructive focus-visible:text-destructive focus-visible:outline-none"
+                aria-label={`Remove queued prompt ${index + 1}`}
+              >
+                <X className="size-3.5" />
+              </button>
+              <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground text-sm leading-relaxed">
+                {item.text}
+              </p>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
   );
 }
 
