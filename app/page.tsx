@@ -20,7 +20,6 @@ import {
   X,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -818,7 +817,7 @@ function ChatPane({
       {promptQueue.length > 0 && (
         <PromptQueueBar queue={promptQueue} onRemove={onRemoveQueued} />
       )}
-      <div className="shrink-0 border-t p-3">
+      <div className="shrink-0 p-3">
         <PromptInput onSubmit={handleSubmit}>
           <PromptInputBody>
             <PromptInputTextarea
@@ -830,10 +829,7 @@ function ChatPane({
           </PromptInputBody>
           <PromptInputFooter>
             <div />
-            <PromptInputSubmit
-              status={busy ? "submitted" : undefined}
-              disabled={!ready || !input.trim()}
-            />
+            <PromptInputSubmit disabled={!ready || !input.trim()} />
           </PromptInputFooter>
         </PromptInput>
       </div>
@@ -849,41 +845,36 @@ function PromptQueueBar({
   onRemove: (id: string) => void;
 }) {
   return (
-    <div className="shrink-0 border-t bg-muted/30 px-4 py-2">
-      <div className="mb-2 flex items-center gap-2 text-muted-foreground text-sm">
-        <ListOrdered className="size-4 shrink-0" />
-        <span className="text-sm">
-          Queued prompts
-          <Badge variant="secondary" className="ml-2 font-normal">
-            {queue.length}
-          </Badge>
-        </span>
-      </div>
-      <ul className="flex max-h-32 flex-col gap-1.5 overflow-y-auto">
-        {queue.map((item, index) => (
-          <li
-            key={item.id}
-            className="flex items-start gap-2 rounded-md border bg-background/80 px-2.5 py-1.5 text-xs leading-snug"
-          >
-            <span className="mt-0.5 shrink-0 font-medium text-muted-foreground tabular-nums">
-              {index + 1}.
-            </span>
-            <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground">
-              {item.text}
-            </p>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
-              onClick={() => onRemove(item.id)}
-              aria-label={`Remove queued prompt ${index + 1}`}
+    <div className="shrink-0 px-3 pt-3">
+      <div className="rounded-md border bg-muted/20">
+        <div className="flex items-center justify-between px-3 py-2 text-muted-foreground text-sm">
+          <div className="flex items-center gap-2">
+            <ListOrdered className="size-4 shrink-0" />
+            <span>Queue</span>
+          </div>
+          <span className="tabular-nums">{queue.length}</span>
+        </div>
+        <ul className="flex max-h-48 flex-col overflow-y-auto px-1 pb-1">
+          {queue.map((item, index) => (
+            <li
+              key={item.id}
+              className="group flex items-start gap-2 rounded-md px-2 py-1.5"
             >
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          </li>
-        ))}
-      </ul>
+              <button
+                type="button"
+                onClick={() => onRemove(item.id)}
+                className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:text-destructive focus-visible:text-destructive focus-visible:outline-none"
+                aria-label={`Remove queued prompt ${index + 1}`}
+              >
+                <X className="size-3.5" />
+              </button>
+              <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground text-sm leading-relaxed">
+                {item.text}
+              </p>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
