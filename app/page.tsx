@@ -585,11 +585,15 @@ function mergeSdkMessage(
       return [...prev, { kind: "user", text: inner.content }];
     }
     const blocks = Array.isArray(inner.content) ? inner.content : [];
-    // Synthetic user messages (e.g. Skill body injections, system reminders)
+    // Synthetic user messages (Skill body injections, system reminders, etc.)
     // and messages parented to a tool call are SDK-internal — never real
-    // user input. Process tool_result blocks but drop their text blocks.
+    // user input. The SDK flags them with `isSynthetic: true`; parent_tool_use_id
+    // and `tool_use_result` also mark non-user content. Process tool_result
+    // blocks but drop their text blocks.
     const isSynthetic =
-      msg.subtype === "synthetic" || Boolean(msg.parent_tool_use_id);
+      msg.isSynthetic === true ||
+      Boolean(msg.parent_tool_use_id) ||
+      msg.tool_use_result !== undefined;
     const next = [...prev];
     let promptText = "";
     for (const block of blocks as Array<Record<string, unknown>>) {
@@ -795,7 +799,7 @@ function ChatPane({
         />
       </header>
       <Conversation className="flex-1 min-h-0">
-        <ConversationContent className="gap-4">
+        <ConversationContent className="!gap-0">
           {bootStatus === "ready" && !transcriptLoaded && (
             <div className="text-xs text-muted-foreground">
               Loading conversation…
@@ -807,17 +811,14 @@ function ChatPane({
               into the sandbox and the preview reloads on the right.
             </div>
           )}
-          {visibleItems.map((item, i) => (
-            <ChatItemRow key={i} item={item} />
+          {groupTurnsByUser(visibleItems).map((section, gi) => (
+            <TurnSection key={gi} section={section} />
           ))}
+          <div aria-hidden className="h-8 shrink-0" />
         </ConversationContent>
         <ConversationScrollButton />
       </Conversation>
-      {todos.length > 0 && <TodoAccordion todos={todos} />}
-      {promptQueue.length > 0 && (
-        <PromptQueueBar queue={promptQueue} onRemove={onRemoveQueued} />
-      )}
-      <div className="shrink-0 p-3">
+      <ChatChrome todos={todos}>
         <PromptInput onSubmit={handleSubmit}>
           <PromptInputBody>
             <PromptInputTextarea
@@ -832,49 +833,29 @@ function ChatPane({
             <PromptInputSubmit disabled={!ready || !input.trim()} />
           </PromptInputFooter>
         </PromptInput>
-      </div>
+      </ChatChrome>
     </section>
   );
 }
 
-function PromptQueueBar({
-  queue,
-  onRemove,
+function ChatChrome({
+  todos,
+  children,
 }: {
-  queue: QueuedPrompt[];
-  onRemove: (id: string) => void;
+  todos: TodoItem[];
+  children: React.ReactNode;
 }) {
+  const fade =
+    "linear-gradient(to top, black 0%, black 12%, rgba(0,0,0,0.55) 48%, transparent 100%)";
   return (
-    <div className="shrink-0 px-3 pt-3">
-      <div className="rounded-md border bg-muted/20">
-        <div className="flex items-center justify-between px-3 py-2 text-muted-foreground text-sm">
-          <div className="flex items-center gap-2">
-            <ListOrdered className="size-4 shrink-0" />
-            <span>Queue</span>
-          </div>
-          <span className="tabular-nums">{queue.length}</span>
-        </div>
-        <ul className="flex max-h-48 flex-col overflow-y-auto px-1 pb-1">
-          {queue.map((item, index) => (
-            <li
-              key={item.id}
-              className="group flex items-start gap-2 rounded-md px-2 py-1.5"
-            >
-              <button
-                type="button"
-                onClick={() => onRemove(item.id)}
-                className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:text-destructive focus-visible:text-destructive focus-visible:outline-none"
-                aria-label={`Remove queued prompt ${index + 1}`}
-              >
-                <X className="size-3.5" />
-              </button>
-              <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground text-sm leading-relaxed">
-                {item.text}
-              </p>
-            </li>
-          ))}
-        </ul>
-      </div>
+    <div className="relative shrink-0">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -top-14 left-0 right-0 h-14 bg-background backdrop-blur-sm"
+        style={{ maskImage: fade, WebkitMaskImage: fade }}
+      />
+      {todos.length > 0 && <TodoAccordion todos={todos} />}
+      <div className="px-3 pb-3">{children}</div>
     </div>
   );
 }
@@ -896,7 +877,7 @@ function TodoAccordion({ todos }: { todos: TodoItem[] }) {
           .join(" · ");
 
   return (
-    <div className="shrink-0 border-t bg-muted/30 px-4 py-2">
+    <div className="shrink-0 bg-muted/30 px-4 py-2">
       <Task defaultOpen={false}>
         <TaskTrigger title={`Tasks · ${todos.length} — ${summary}`} />
         <TaskContent>
@@ -936,6 +917,63 @@ function TodoStatusIcon({ status }: { status: TodoStatus }) {
   }
   return (
     <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+  );
+}
+
+type TurnSectionData = {
+  user: Extract<ChatItem, { kind: "user" }> | null;
+  rest: ChatItem[];
+};
+
+function groupTurnsByUser(items: ChatItem[]): TurnSectionData[] {
+  const sections: TurnSectionData[] = [];
+  let current: TurnSectionData = { user: null, rest: [] };
+  for (const item of items) {
+    if (item.kind === "user") {
+      if (current.user || current.rest.length > 0) sections.push(current);
+      current = { user: item, rest: [] };
+    } else {
+      current.rest.push(item);
+    }
+  }
+  if (current.user || current.rest.length > 0) sections.push(current);
+  return sections;
+}
+
+function TurnSection({ section }: { section: TurnSectionData }) {
+  return (
+    <div className="flex flex-col">
+      {section.user && <PinnedPrompt text={section.user.text} />}
+      {section.rest.length > 0 && (
+        <div className="flex flex-col gap-4 pb-6 pt-4">
+          {section.rest.map((item, i) => (
+            <ChatItemRow key={i} item={item} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PinnedPrompt({ text }: { text: string }) {
+  const fade =
+    "linear-gradient(to bottom, black 0%, black 72%, rgba(0,0,0,0.6) 88%, transparent 100%)";
+  return (
+    <div className="sticky top-0 z-20 -mx-4 px-4 pb-8 pt-4">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-background/75 backdrop-blur-lg"
+        style={{ maskImage: fade, WebkitMaskImage: fade }}
+      />
+      <div className="relative rounded-lg border border-border/80 bg-secondary px-4 py-2.5 shadow-sm">
+        <div
+          className="line-clamp-[7] whitespace-pre-wrap break-words font-sans text-sm text-secondary-foreground"
+          title={text}
+        >
+          {text}
+        </div>
+      </div>
+    </div>
   );
 }
 
