@@ -102,6 +102,7 @@ const q = query({
       "WebFetch",
       "WebSearch",
       "Skill",
+      "TodoWrite",
     ],
   },
 });
