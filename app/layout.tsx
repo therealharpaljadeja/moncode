@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import "@/components/dotmatrix-loader.css";
 
 export const metadata: Metadata = {
   title: "Moncode",
