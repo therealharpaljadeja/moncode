@@ -84,7 +84,7 @@ import {
   WebPreviewNavigationButton,
   WebPreviewUrl,
 } from "@/components/ai-elements/web-preview";
-import { DotmSquare5 } from "@/components/ui/dotm-square-5";
+import { SandboxLoader } from "@/components/sandbox-loader";
 import type { ToolUIPart } from "ai";
 import type { BundledLanguage } from "shiki";
 import type { ReactNode } from "react";
@@ -1062,7 +1062,7 @@ function RightPane({
 }) {
   if (bootStatus !== "ready") {
     return (
-      <BootPanel phase={bootPhase} error={bootError} status={bootStatus} />
+      <SandboxLoader phase={bootPhase} error={bootError} status={bootStatus} />
     );
   }
   return (
@@ -1272,34 +1272,3 @@ function languageForPath(path: string): BundledLanguage {
   return LANGUAGE_BY_EXT[ext] ?? "text";
 }
 
-function BootPanel({
-  phase,
-  error,
-  status,
-}: {
-  phase: BootPhase | null;
-  error: string | null;
-  status: BootStatus;
-}) {
-  const statusLine =
-    status === "failed"
-      ? "Boot failed"
-      : phase?.label || "Connecting to sandbox…";
-
-  return (
-    <section className="flex h-full min-h-0 flex-col items-center justify-center gap-4 p-8 text-center">
-      <DotmSquare5
-        ariaLabel="Sandbox booting"
-        size={28}
-        dotSize={3}
-        className="text-primary"
-      />
-      <div className="space-y-2">
-        <p className="text-xs text-muted-foreground max-w-md">{statusLine}</p>
-        {error && (
-          <p className="text-xs text-destructive">Error: {error}</p>
-        )}
-      </div>
-    </section>
-  );
-}
