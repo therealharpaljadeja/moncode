@@ -57,13 +57,15 @@ import {
   TaskItem,
   TaskTrigger,
 } from "@/components/ai-elements/task";
+import { Tool, type ToolPart } from "@/components/ui/tool";
 import {
-  Tool,
-  ToolContent,
-  ToolHeader,
-  ToolInput,
-  ToolOutput,
-} from "@/components/ai-elements/tool";
+  Steps,
+  StepsContent,
+  StepsItem,
+  StepsTrigger,
+} from "@/components/ui/steps";
+import { ThinkingBar } from "@/components/ui/thinking-bar";
+import { TextShimmer } from "@/components/ui/text-shimmer";
 import {
   FileTree as ElementsFileTree,
   FileTreeFile,
@@ -84,8 +86,7 @@ import {
   WebPreviewNavigationButton,
   WebPreviewUrl,
 } from "@/components/ai-elements/web-preview";
-import { SandboxLoader } from "@/components/sandbox-loader";
-import type { ToolUIPart } from "ai";
+import { DotmSquare5 } from "@/components/ui/dotm-square-5";
 import type { BundledLanguage } from "shiki";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
@@ -94,13 +95,20 @@ type BootStatus = "idle" | "pending" | "ready" | "failed";
 
 type ChatItem =
   | { kind: "user"; text: string }
-  | { kind: "assistant"; text: string }
+  | {
+      kind: "assistant";
+      text: string;
+      attributionSkill?: string;
+      requestId?: string;
+    }
   | {
       kind: "tool_use";
       name: string;
       input: unknown;
       result?: string;
       isError?: boolean;
+      attributionSkill?: string;
+      requestId?: string;
     }
   | { kind: "result"; text: string }
   | { kind: "error"; text: string }
@@ -563,15 +571,28 @@ function mergeSdkMessage(
   if (type === "assistant") {
     const inner = (msg.message ?? {}) as { content?: unknown };
     const blocks = Array.isArray(inner.content) ? inner.content : [];
+    const attributionSkill =
+      typeof msg.attributionSkill === "string"
+        ? msg.attributionSkill
+        : undefined;
+    const requestId =
+      typeof msg.requestId === "string" ? msg.requestId : undefined;
     const next = [...prev];
     for (const block of blocks as Array<Record<string, unknown>>) {
       if (block.type === "text" && typeof block.text === "string") {
-        next.push({ kind: "assistant", text: block.text });
+        next.push({
+          kind: "assistant",
+          text: block.text,
+          attributionSkill,
+          requestId,
+        });
       } else if (block.type === "tool_use") {
         next.push({
           kind: "tool_use",
           name: typeof block.name === "string" ? block.name : "tool",
           input: block.input,
+          attributionSkill,
+          requestId,
         });
       }
     }
@@ -791,19 +812,20 @@ function ChatPane({
 
   return (
     <section className="flex h-full min-h-0 flex-col">
-      <header className="flex h-12 shrink-0 items-center border-b px-4 font-semibold">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4 font-semibold">
         <ChatTitle
           title={title}
           animatingTitle={animatingTitle}
           onAnimationDone={onTitleAnimationDone}
         />
+        <div className="flex-1" />
       </header>
       <Conversation className="flex-1 min-h-0">
         <ConversationContent className="!gap-0">
           {bootStatus === "ready" && !transcriptLoaded && (
-            <div className="text-xs text-muted-foreground">
+            <TextShimmer className="text-xs">
               Loading conversation…
-            </div>
+            </TextShimmer>
           )}
           {ready && visibleItems.length === 0 && (
             <div className="text-xs text-muted-foreground">
@@ -814,6 +836,11 @@ function ChatPane({
           {groupTurnsByUser(visibleItems).map((section, gi) => (
             <TurnSection key={gi} section={section} />
           ))}
+          {busy && (
+            <div className="px-1 pb-4">
+              <ThinkingBar />
+            </div>
+          )}
           <div aria-hidden className="h-8 shrink-0" />
         </ConversationContent>
         <ConversationScrollButton />
@@ -940,19 +967,79 @@ function groupTurnsByUser(items: ChatItem[]): TurnSectionData[] {
   return sections;
 }
 
+type RestGroup =
+  | { kind: "single"; item: ChatItem }
+  | { kind: "skill_run"; skill: string; items: ChatItem[] };
+
+function groupRestBySkill(items: ChatItem[]): RestGroup[] {
+  const out: RestGroup[] = [];
+  let i = 0;
+  while (i < items.length) {
+    const skill = skillOf(items[i]);
+    if (skill) {
+      const run: ChatItem[] = [];
+      while (i < items.length && skillOf(items[i]) === skill) {
+        run.push(items[i]);
+        i += 1;
+      }
+      out.push({ kind: "skill_run", skill, items: run });
+    } else {
+      out.push({ kind: "single", item: items[i] });
+      i += 1;
+    }
+  }
+  return out;
+}
+
+function skillOf(item: ChatItem): string | undefined {
+  if (item.kind === "assistant" || item.kind === "tool_use") {
+    return item.attributionSkill;
+  }
+  return undefined;
+}
+
 function TurnSection({ section }: { section: TurnSectionData }) {
+  const groups = groupRestBySkill(section.rest);
   return (
     <div className="flex flex-col">
       {section.user && <PinnedPrompt text={section.user.text} />}
-      {section.rest.length > 0 && (
+      {groups.length > 0 && (
         <div className="flex flex-col gap-4 pb-6 pt-4">
-          {section.rest.map((item, i) => (
-            <ChatItemRow key={i} item={item} />
-          ))}
+          {groups.map((g, i) =>
+            g.kind === "skill_run" ? (
+              <SkillRun key={i} skill={g.skill} items={g.items} />
+            ) : (
+              <ChatItemRow key={i} item={g.item} />
+            ),
+          )}
         </div>
       )}
     </div>
   );
+}
+
+function SkillRun({ skill, items }: { skill: string; items: ChatItem[] }) {
+  const title = humanizeSkill(skill);
+  return (
+    <Steps defaultOpen>
+      <StepsTrigger>Agent run: {title}</StepsTrigger>
+      <StepsContent>
+        <div className="flex flex-col gap-3">
+          {items.map((item, i) => (
+            <StepsItem key={i} className="text-foreground">
+              <ChatItemRow item={item} />
+            </StepsItem>
+          ))}
+        </div>
+      </StepsContent>
+    </Steps>
+  );
+}
+
+function humanizeSkill(skill: string): string {
+  const parts = skill.split(":");
+  const tail = parts[parts.length - 1] ?? skill;
+  return tail.replace(/[-_]/g, " ");
 }
 
 function PinnedPrompt({ text }: { text: string }) {
@@ -1041,32 +1128,32 @@ function ToolUseCard({
 }: {
   item: Extract<ChatItem, { kind: "tool_use" }>;
 }) {
-  const state: ToolUIPart["state"] =
+  const state: ToolPart["state"] =
     item.result === undefined
       ? "input-available"
       : item.isError
         ? "output-error"
         : "output-available";
 
-  const output =
-    item.result !== undefined && !item.isError ? (
-      <pre className="whitespace-pre-wrap break-words p-3 font-mono text-xs">
-        {item.result}
-      </pre>
-    ) : undefined;
+  const input =
+    item.input && typeof item.input === "object"
+      ? (item.input as Record<string, unknown>)
+      : item.input !== undefined
+        ? { value: String(item.input) }
+        : undefined;
 
-  return (
-    <Tool defaultOpen={false}>
-      <ToolHeader type={`tool-${item.name}`} state={state} title={item.name} />
-      <ToolContent>
-        <ToolInput input={item.input} />
-        <ToolOutput
-          output={output}
-          errorText={item.isError ? item.result : undefined}
-        />
-      </ToolContent>
-    </Tool>
-  );
+  const output =
+    item.result !== undefined && !item.isError ? item.result : undefined;
+
+  const toolPart: ToolPart = {
+    type: item.name,
+    state,
+    input,
+    output,
+    errorText: item.isError ? item.result : undefined,
+  };
+
+  return <Tool toolPart={toolPart} />;
 }
 
 function RightPane({
