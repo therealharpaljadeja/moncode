@@ -1,26 +1,25 @@
 import { NextResponse } from "next/server";
-import { readSessionId } from "@/lib/session";
+
+import { requireOwnedProject } from "@/lib/auth";
 import { SANDBOX_CWD, getSession } from "@/lib/sandbox";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type RouteContext = { params: Promise<{ id: string; path: string[] }> };
+
 const MAX_BYTES = 1024 * 1024;
 
-export async function GET(
-  _req: Request,
-  ctx: { params: Promise<{ path: string[] }> },
-) {
-  const sessionId = await readSessionId();
-  if (!sessionId) {
-    return NextResponse.json({ error: "no session" }, { status: 400 });
-  }
-  const session = getSession(sessionId);
+export async function GET(req: Request, context: RouteContext) {
+  const { id: projectId, path: segments } = await context.params;
+  const owned = await requireOwnedProject(req, projectId);
+  if (owned instanceof NextResponse) return owned;
+
+  const session = getSession(projectId);
   if (!session || session.bootStatus !== "ready" || !session.sandbox) {
     return NextResponse.json({ error: "sandbox not ready" }, { status: 409 });
   }
 
-  const { path: segments } = await ctx.params;
   const rel = segments.join("/");
   if (rel.includes("..")) {
     return NextResponse.json({ error: "invalid path" }, { status: 400 });

@@ -1,18 +1,21 @@
 import { NextResponse } from "next/server";
-import { readSessionId } from "@/lib/session";
+
+import { requireOwnedProject } from "@/lib/auth";
 import { getSession, SANDBOX_CWD } from "@/lib/sandbox";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type RouteContext = { params: Promise<{ id: string }> };
+
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9-]{8,}$/;
 
-export async function GET() {
-  const cookieId = await readSessionId();
-  if (!cookieId) {
-    return NextResponse.json({ messages: [] });
-  }
-  const session = getSession(cookieId);
+export async function GET(req: Request, context: RouteContext) {
+  const { id: projectId } = await context.params;
+  const owned = await requireOwnedProject(req, projectId);
+  if (owned instanceof NextResponse) return owned;
+
+  const session = getSession(projectId);
   if (!session || session.bootStatus !== "ready" || !session.sandbox) {
     return NextResponse.json({ messages: [] });
   }
@@ -21,8 +24,6 @@ export async function GET() {
     return NextResponse.json({ messages: [] });
   }
 
-  // Glob across any home dir / cwd-encoding scheme. Two-pass: try the expected
-  // -vercel-sandbox bucket first, then fall back to any project bucket.
   const cmd = await session.sandbox.runCommand({
     cmd: "sh",
     args: [
