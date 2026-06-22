@@ -86,7 +86,7 @@ import {
   WebPreviewNavigationButton,
   WebPreviewUrl,
 } from "@/components/ai-elements/web-preview";
-import { DotmSquare5 } from "@/components/ui/dotm-square-5";
+import { SandboxLoader } from "@/components/sandbox-loader";
 import type { BundledLanguage } from "shiki";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
