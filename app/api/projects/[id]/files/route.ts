@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
-import { readSessionId } from "@/lib/session";
+
+import { requireOwnedProject } from "@/lib/auth";
 import { SANDBOX_CWD, getSession } from "@/lib/sandbox";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+type RouteContext = { params: Promise<{ id: string }> };
 
 const SKIP_DIRS = new Set([
   "node_modules",
@@ -22,12 +25,12 @@ type FileNode = {
   children?: FileNode[];
 };
 
-export async function GET() {
-  const sessionId = await readSessionId();
-  if (!sessionId) {
-    return NextResponse.json({ error: "no session" }, { status: 400 });
-  }
-  const session = getSession(sessionId);
+export async function GET(req: Request, context: RouteContext) {
+  const { id: projectId } = await context.params;
+  const owned = await requireOwnedProject(req, projectId);
+  if (owned instanceof NextResponse) return owned;
+
+  const session = getSession(projectId);
   if (!session || session.bootStatus !== "ready" || !session.sandbox) {
     return NextResponse.json({ tree: [] });
   }

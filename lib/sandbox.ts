@@ -10,7 +10,7 @@ export type BootPhase = {
 export type BootPhaseListener = (phase: BootPhase) => void;
 
 export type Session = {
-  cookieSessionId: string;
+  projectId: string;
   // null while bootPromise is still awaiting Sandbox.create. Becomes non-null
   // before bootStatus transitions to "ready".
   sandbox: Sandbox | null;

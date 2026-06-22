@@ -1,19 +1,23 @@
-import { readSessionId } from "@/lib/session";
+import { NextResponse } from "next/server";
+
+import { requireOwnedProject } from "@/lib/auth";
 import { getSession } from "@/lib/sandbox";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type RouteContext = { params: Promise<{ id: string }> };
+
 function sse(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-export async function GET() {
-  const sessionId = await readSessionId();
-  if (!sessionId) {
-    return new Response("no session", { status: 400 });
-  }
-  const session = getSession(sessionId);
+export async function GET(req: Request, context: RouteContext) {
+  const { id: projectId } = await context.params;
+  const owned = await requireOwnedProject(req, projectId);
+  if (owned instanceof NextResponse) return owned;
+
+  const session = getSession(projectId);
   if (!session) {
     return new Response("no sandbox", { status: 404 });
   }
@@ -32,7 +36,6 @@ export async function GET() {
         }
       };
 
-      // Replay current phase so a late subscriber catches up immediately.
       if (session.bootPhase) {
         safeEnqueue(sse("phase", session.bootPhase));
       }

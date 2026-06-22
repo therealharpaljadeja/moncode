@@ -1,7 +1,7 @@
 import path from "path";
 import fs from "fs/promises";
 import { SANDBOX_CWD, Session } from "@/lib/sandbox";
-import { upsertStored } from "@/lib/session-store";
+import { updateProject } from "@/lib/projects";
 
 let cachedAgentScript: Buffer | null = null;
 async function loadAgentScript(): Promise<Buffer> {
@@ -113,6 +113,6 @@ function captureSessionId(
   ) {
     if (session.agentSessionId === sid) return;
     session.agentSessionId = sid;
-    void upsertStored(session.cookieSessionId, { agentSessionId: sid });
+    void updateProject(session.projectId, { agentSessionId: sid });
   }
 }
