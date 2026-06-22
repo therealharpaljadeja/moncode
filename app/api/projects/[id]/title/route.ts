@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
-import { readSessionId } from "@/lib/session";
-import { getStored, upsertStored } from "@/lib/session-store";
+
+import { requireOwnedProject } from "@/lib/auth";
+import { updateProject } from "@/lib/projects";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+type RouteContext = { params: Promise<{ id: string }> };
 
 const TITLE_MODEL = "claude-haiku-4-5-20251001";
 const MAX_TITLE_LEN = 48;
@@ -17,11 +20,10 @@ const TITLE_SYSTEM = [
   "Return only the title text.",
 ].join("\n");
 
-export async function POST(req: Request) {
-  const cookieId = await readSessionId();
-  if (!cookieId) {
-    return NextResponse.json({ error: "no session" }, { status: 400 });
-  }
+export async function POST(req: Request, context: RouteContext) {
+  const { id: projectId } = await context.params;
+  const owned = await requireOwnedProject(req, projectId);
+  if (owned instanceof NextResponse) return owned;
 
   let body: { prompt?: unknown };
   try {
@@ -34,9 +36,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "prompt is required" }, { status: 400 });
   }
 
-  const stored = await getStored(cookieId);
-  if (stored?.title) {
-    return NextResponse.json({ title: stored.title, cached: true });
+  if (owned.project.title) {
+    return NextResponse.json({ title: owned.project.title, cached: true });
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -55,7 +56,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: message }, { status: 502 });
   }
 
-  await upsertStored(cookieId, { title });
+  await updateProject(projectId, { title });
   return NextResponse.json({ title });
 }
 

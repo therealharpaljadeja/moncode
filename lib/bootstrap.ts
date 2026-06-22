@@ -9,10 +9,9 @@ import {
   setBootPhase,
 } from "@/lib/sandbox";
 import {
-  getStored,
-  removeStored,
-  upsertStored,
-} from "@/lib/session-store";
+  getProject,
+  updateProject,
+} from "@/lib/projects";
 
 const FORTY_FIVE_MINUTES_MS = 45 * 60 * 1000;
 const READINESS_TIMEOUT_MS = 5 * 60 * 1000;
@@ -258,14 +257,14 @@ async function bootSandbox(session: Session, sandbox: Sandbox): Promise<void> {
  * bootPromise — the user sees "Creating sandbox…" right away instead of a
  * silent stall while Sandbox.create runs.
  */
-export function createSandboxForSession(cookieSessionId: string): Session {
+export function createSandboxForProject(projectId: string): Session {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("ANTHROPIC_API_KEY is required");
   }
 
   const session: Session = {
-    cookieSessionId,
+    projectId,
     sandbox: null,
     sandboxUrl: "",
     agentSessionId: null,
@@ -300,10 +299,9 @@ export function createSandboxForSession(cookieSessionId: string): Session {
       session.sandboxUrl = sandbox.domain(APP_PORT);
       appendBootLog(session, `Sandbox ${sandbox.sandboxId} ready.`);
 
-      await upsertStored(cookieSessionId, {
+      await updateProject(projectId, {
         sandboxId: sandbox.sandboxId,
         agentSessionId: null,
-        createdAt: Date.now(),
       });
 
       await bootSandbox(session, sandbox);
@@ -330,16 +328,16 @@ export function createSandboxForSession(cookieSessionId: string): Session {
  * boots a fresh sandbox.
  */
 export async function reattachSession(
-  cookieSessionId: string,
+  projectId: string,
 ): Promise<Session | null> {
-  const stored = await getStored(cookieSessionId);
+  const stored = await getProject(projectId);
   if (!stored?.sandboxId) return null;
 
   try {
     const { Sandbox } = await import("@vercel/sandbox");
     const sandbox = await Sandbox.get({ sandboxId: stored.sandboxId });
     return {
-      cookieSessionId,
+      projectId,
       sandbox,
       sandboxUrl: sandbox.domain(APP_PORT),
       agentSessionId: stored.agentSessionId ?? null,
@@ -351,7 +349,10 @@ export async function reattachSession(
       bootPhaseListeners: new Set(),
     };
   } catch {
-    await removeStored(cookieSessionId).catch(() => {});
+    await updateProject(projectId, {
+      sandboxId: null,
+      agentSessionId: null,
+    }).catch(() => {});
     return null;
   }
 }
