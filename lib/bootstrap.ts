@@ -6,7 +6,9 @@ import {
   SANDBOX_CWD,
   Session,
   appendBootLog,
+  getSession,
   setBootPhase,
+  setSession,
 } from "@/lib/sandbox";
 import {
   getProject,
@@ -192,6 +194,7 @@ async function bootSandbox(session: Session, sandbox: Sandbox): Promise<void> {
     await runStep(session, sandbox, "install Claude Agent SDK", "npm", [
       "i",
       "@anthropic-ai/claude-agent-sdk",
+      "zod",
     ]);
 
     setBootPhase(session, {
@@ -355,4 +358,42 @@ export async function reattachSession(
     }).catch(() => {});
     return null;
   }
+}
+
+const sandboxBootLocks = new Map<string, Promise<Session>>();
+
+/**
+ * Returns the in-memory session for a project, creating at most one sandbox
+ * even when POST /sandbox is invoked concurrently (e.g. React Strict Mode).
+ */
+export function getOrCreateSandboxSession(projectId: string): Promise<Session> {
+  const existing = getSession(projectId);
+  if (existing) return Promise.resolve(existing);
+
+  let pending = sandboxBootLocks.get(projectId);
+  if (!pending) {
+    pending = new Promise<Session>((resolve, reject) => {
+      void (async () => {
+        try {
+          const again = getSession(projectId);
+          if (again) {
+            resolve(again);
+            return;
+          }
+
+          const reattached = await reattachSession(projectId);
+          const session = reattached ?? createSandboxForProject(projectId);
+          setSession(projectId, session);
+          resolve(session);
+        } catch (err) {
+          reject(err);
+        } finally {
+          sandboxBootLocks.delete(projectId);
+        }
+      })();
+    });
+    sandboxBootLocks.set(projectId, pending);
+  }
+
+  return pending;
 }

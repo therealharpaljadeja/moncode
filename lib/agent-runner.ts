@@ -15,16 +15,27 @@ export type AgentEvent =
   | { type: "sdk_message"; message: Record<string, unknown> }
   | { type: "agent_stderr"; data: string }
   | { type: "parse_error"; raw: string; error: string }
-  | { type: "agent_exit"; exitCode: number };
+  | { type: "agent_exit"; exitCode: number }
+  | { type: "github_auth_required"; reason: string };
+
+export type AgentTurnContext = {
+  projectId: string;
+  apiBaseUrl: string;
+  agentSecret: string | null;
+};
 
 export async function* runAgentTurn(
   session: Session,
   prompt: string,
   signal?: AbortSignal,
+  context?: AgentTurnContext,
 ): AsyncGenerator<AgentEvent> {
   const payload = JSON.stringify({
     prompt,
     sessionId: session.agentSessionId,
+    projectId: context?.projectId ?? session.projectId,
+    apiBaseUrl: context?.apiBaseUrl,
+    agentSecret: context?.agentSecret,
   });
 
   if (!session.sandbox) {
@@ -88,6 +99,14 @@ function* parseLine(
   if (!trimmed) return;
   try {
     const message = JSON.parse(trimmed) as Record<string, unknown>;
+    if (message.type === "moncode_event" && message.event === "github_auth_required") {
+      const reason =
+        typeof message.reason === "string"
+          ? message.reason
+          : "Connect GitHub to continue.";
+      yield { type: "github_auth_required", reason };
+      return;
+    }
     captureSessionId(session, message);
     yield { type: "sdk_message", message };
   } catch (err) {

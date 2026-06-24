@@ -92,6 +92,7 @@ import {
 } from "@/components/ai-elements/web-preview";
 import { SandboxLoader } from "@/components/sandbox-loader";
 import { AuthGate } from "@/components/auth-gate";
+import { GithubConnectionCard } from "@/components/github-connection-card";
 import { WalletBadge } from "@/components/wallet-badge";
 import { useAuthFetch } from "@/hooks/use-auth-fetch";
 import { consumeSse } from "@/lib/sse-client";
@@ -120,7 +121,8 @@ type ChatItem =
     }
   | { kind: "result"; text: string }
   | { kind: "error"; text: string }
-  | { kind: "stderr"; text: string };
+  | { kind: "stderr"; text: string }
+  | { kind: "github_auth"; reason: string; resolved?: boolean };
 
 type TodoStatus = "pending" | "in_progress" | "completed";
 
@@ -269,10 +271,17 @@ function AppPage() {
     [authFetch, projectApi],
   );
 
+  const bootRequestedRef = useRef(false);
+
   useEffect(() => {
-    if (!privyReady) return;
+    bootRequestedRef.current = false;
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!privyReady || bootRequestedRef.current) return;
+    bootRequestedRef.current = true;
     void ensureSandbox();
-  }, [privyReady, ensureSandbox]);
+  }, [privyReady, projectId, ensureSandbox]);
 
   useEffect(() => {
     if (!privyReady || !postReturned || bootStatus !== "pending") return;
@@ -537,6 +546,7 @@ function AppPage() {
               setAnimatingTitle(null);
             }
           }}
+          onGithubConnected={(text) => setInput(text)}
         />
       </ResizablePanel>
       <ResizableHandle />
@@ -620,6 +630,17 @@ function handleSseBlock(
       }
       return next;
     });
+    return;
+  }
+  if (event === "github_auth_required") {
+    const reason =
+      typeof payload.reason === "string"
+        ? payload.reason
+        : "Connect GitHub so the agent can continue.";
+    setItems((prev) => [
+      ...prev,
+      { kind: "github_auth", reason, resolved: false },
+    ]);
     return;
   }
   if (event === "error") {
@@ -876,6 +897,7 @@ function ChatPane({
   title,
   animatingTitle,
   onTitleAnimationDone,
+  onGithubConnected,
 }: {
   items: ChatItem[];
   todos: TodoItem[];
@@ -890,6 +912,7 @@ function ChatPane({
   title: string | null;
   animatingTitle: string | null;
   onTitleAnimationDone: () => void;
+  onGithubConnected: (prefill: string) => void;
 }) {
   const ready = bootStatus === "ready" && transcriptLoaded;
   const placeholder =
@@ -933,6 +956,9 @@ function ChatPane({
           onAnimationDone={onTitleAnimationDone}
         />
         <div className="flex-1" />
+        <Button asChild variant="ghost" size="sm" className="hidden sm:inline-flex">
+          <Link href="/connections">Connections</Link>
+        </Button>
         <WalletBadge />
       </header>
       <Conversation className="flex-1 min-h-0">
@@ -949,7 +975,11 @@ function ChatPane({
             </div>
           )}
           {groupTurnsByUser(visibleItems).map((section, gi) => (
-            <TurnSection key={gi} section={section} />
+            <TurnSection
+              key={gi}
+              section={section}
+              onGithubConnected={onGithubConnected}
+            />
           ))}
           {busy && (
             <div className="px-1 pb-4">
@@ -1113,7 +1143,13 @@ function skillOf(item: ChatItem): string | undefined {
   return undefined;
 }
 
-function TurnSection({ section }: { section: TurnSectionData }) {
+function TurnSection({
+  section,
+  onGithubConnected,
+}: {
+  section: TurnSectionData;
+  onGithubConnected: (prefill: string) => void;
+}) {
   const groups = groupRestBySkill(section.rest);
   return (
     <div className="flex flex-col">
@@ -1122,9 +1158,18 @@ function TurnSection({ section }: { section: TurnSectionData }) {
         <div className="flex flex-col gap-4 pb-6 pt-4">
           {groups.map((g, i) =>
             g.kind === "skill_run" ? (
-              <SkillRun key={i} skill={g.skill} items={g.items} />
+              <SkillRun
+                key={i}
+                skill={g.skill}
+                items={g.items}
+                onGithubConnected={onGithubConnected}
+              />
             ) : (
-              <ChatItemRow key={i} item={g.item} />
+              <ChatItemRow
+                key={i}
+                item={g.item}
+                onGithubConnected={onGithubConnected}
+              />
             ),
           )}
         </div>
@@ -1133,7 +1178,15 @@ function TurnSection({ section }: { section: TurnSectionData }) {
   );
 }
 
-function SkillRun({ skill, items }: { skill: string; items: ChatItem[] }) {
+function SkillRun({
+  skill,
+  items,
+  onGithubConnected,
+}: {
+  skill: string;
+  items: ChatItem[];
+  onGithubConnected?: (prefill: string) => void;
+}) {
   const title = humanizeSkill(skill);
   return (
     <Steps defaultOpen>
@@ -1142,7 +1195,10 @@ function SkillRun({ skill, items }: { skill: string; items: ChatItem[] }) {
         <div className="flex flex-col gap-3">
           {items.map((item, i) => (
             <StepsItem key={i} className="text-foreground">
-              <ChatItemRow item={item} />
+              <ChatItemRow
+                item={item}
+                onGithubConnected={onGithubConnected}
+              />
             </StepsItem>
           ))}
         </div>
@@ -1179,7 +1235,13 @@ function PinnedPrompt({ text }: { text: string }) {
   );
 }
 
-function ChatItemRow({ item }: { item: ChatItem }) {
+function ChatItemRow({
+  item,
+  onGithubConnected,
+}: {
+  item: ChatItem;
+  onGithubConnected?: (prefill: string) => void;
+}) {
   if (item.kind === "user") {
     return (
       <Message from="user">
@@ -1202,6 +1264,19 @@ function ChatItemRow({ item }: { item: ChatItem }) {
   }
   if (item.kind === "tool_use") {
     return <ToolUseCard item={item} />;
+  }
+  if (item.kind === "github_auth") {
+    return (
+      <GithubConnectionCard
+        variant="chat"
+        reason={item.reason}
+        onConnected={() =>
+          onGithubConnected?.(
+            "GitHub is connected — please continue where you left off.",
+          )
+        }
+      />
+    );
   }
   if (item.kind === "stderr") {
     return <StderrCard text={item.text} />;
