@@ -1,5 +1,9 @@
 import { upsertConnection, type Connection } from "@/lib/connections";
-import { syncGithubDisplayName } from "@/lib/github";
+import {
+  getGithubConnectionStatus,
+  syncGithubDisplayName,
+  type GithubConnectionStatus,
+} from "@/lib/github";
 import {
   getGithubIntegrationId,
   getNango,
@@ -19,6 +23,22 @@ type NangoListedConnection = {
   tags?: Record<string, string>;
   metadata?: Record<string, unknown> | null;
 };
+
+/**
+ * Find an existing GitHub connection in Nango for this user (by end_user_id tag).
+ * Used after a soft disconnect so reconnect can re-authorize without a fresh install.
+ */
+export async function findGithubNangoConnectionId(
+  userId: string,
+): Promise<string | null> {
+  if (!isNangoConfigured()) return null;
+
+  const nango = getNango();
+  const integrationId = getGithubIntegrationId();
+  const listed = await listGithubConnectionsForUser(nango, userId, integrationId);
+  const match = pickBestConnection(listed, integrationId);
+  return match?.connection_id ?? null;
+}
 
 /**
  * Pull the user's GitHub connection from Nango and persist it locally.
@@ -55,6 +75,27 @@ export async function syncGithubConnectionForUser(
   }
 
   return row;
+}
+
+/**
+ * After a soft disconnect, Nango may still hold valid credentials.
+ * Re-link Moncode locally without opening the Connect UI (which stalls on
+ * GitHub's "app already installed" page when there is nothing new to authorize).
+ */
+export async function tryRestoreGithubFromNango(
+  userId: string,
+): Promise<GithubConnectionStatus | null> {
+  if (!isNangoConfigured()) return null;
+  if (!(await findGithubNangoConnectionId(userId))) return null;
+
+  const row = await syncGithubConnectionForUser(userId);
+  if (!row) return null;
+
+  const status = await getGithubConnectionStatus(userId);
+  if (status.connected && !status.invalid) {
+    return status;
+  }
+  return null;
 }
 
 async function listGithubConnectionsForUser(

@@ -38,7 +38,7 @@ export function GithubConnectionCard({
   } = useGithubConnection();
 
   const handleConnect = async () => {
-    const ok = await connect({ reconnect: invalid });
+    const ok = await connect();
     if (ok) onConnected?.();
   };
 
@@ -67,10 +67,10 @@ export function GithubConnectionCard({
             <p className={cn("text-sm text-muted-foreground", isChat && "text-xs")}>
               {reason ??
                 (invalid
-                  ? "Your GitHub connection is stale or missing credentials. Disconnect, then connect again after updating your app in Nango."
+                  ? "Your GitHub credentials need refreshing. Use Reconnect to open GitHub authorization. If you are stuck on an already-installed app page, use Revoke access first."
                   : connected
                     ? `Signed in as ${displayName ?? "your GitHub account"}. The agent can create repos, push code, and open pull requests.`
-                    : "Authorize Moncode to use GitHub on your behalf so the agent can create repos, commit, push, and open PRs.")}
+                    : "Disconnect only unlinks Moncode — your GitHub app install stays. Click Connect to restore instantly if you have not revoked access.")}
             </p>
           </div>
         </div>
@@ -100,6 +100,17 @@ export function GithubConnectionCard({
                 )}
                 Disconnect
               </Button>
+              {!isChat && (
+                <Button
+                  variant="ghost"
+                  size="default"
+                  disabled={connecting}
+                  onClick={() => void disconnect({ revoke: true })}
+                  className="text-muted-foreground"
+                >
+                  Revoke access
+                </Button>
+              )}
               {invalid && (
                 <Button
                   size={isChat ? "sm" : "default"}

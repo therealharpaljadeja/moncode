@@ -73,52 +73,92 @@ export function useGithubConnection() {
     void refresh();
   }, [refresh]);
 
-  const connect = useCallback(
-    async (opts?: { reconnect?: boolean }) => {
-      setState((prev) => ({ ...prev, connecting: true, error: null }));
-      try {
-        const res = await authFetch("/api/connections/session", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            provider: "github",
-            reconnect: opts?.reconnect ?? false,
-          }),
+  const connect = useCallback(async () => {
+    setState((prev) => ({ ...prev, connecting: true, error: null }));
+    try {
+      const res = await authFetch("/api/connections/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "github",
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        mode?: string;
+        sessionToken?: string;
+        error?: string;
+      };
+      if (!res.ok) {
+        throw new Error(data.error ?? "Could not start GitHub authorization.");
+      }
+
+      // Nango still has valid credentials — skip Connect UI (avoids the
+      // "app already installed" dead-end on GitHub App reconnect).
+      if (data.mode === "restored") {
+        await refresh();
+        setState((prev) => ({ ...prev, connecting: false }));
+        return true;
+      }
+
+      if (!data.sessionToken) {
+        throw new Error(data.error ?? "Could not start GitHub authorization.");
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        const connectUi = getNango().openConnectUI({
+          onEvent: (event) => {
+            if (event.type === "connect") {
+              resolve();
+            } else if (event.type === "close") {
+              reject(new Error("Authorization window closed."));
+            }
+          },
         });
-        const data = (await res.json().catch(() => ({}))) as {
-          sessionToken?: string;
+        connectUi.setSessionToken(data.sessionToken!);
+      });
+
+      const syncRes = await authFetch("/api/connections/sync", {
+        method: "POST",
+      });
+      if (!syncRes.ok) {
+        const syncData = (await syncRes.json().catch(() => ({}))) as {
           error?: string;
         };
-        if (!res.ok || !data.sessionToken) {
-          throw new Error(data.error ?? "Could not start GitHub authorization.");
-        }
+        throw new Error(
+          syncData.error ??
+            "GitHub authorized in Nango but Moncode could not save the connection.",
+        );
+      }
 
-        await new Promise<void>((resolve, reject) => {
-          const connectUi = getNango().openConnectUI({
-            onEvent: (event) => {
-              if (event.type === "connect") {
-                resolve();
-              } else if (event.type === "close") {
-                reject(new Error("Authorization window closed."));
-              }
-            },
-          });
-          connectUi.setSessionToken(data.sessionToken!);
-        });
+      await refresh();
+      setState((prev) => ({ ...prev, connecting: false }));
+      return true;
+    } catch (err) {
+      setState((prev) => ({
+        ...prev,
+        connecting: false,
+        error: err instanceof Error ? err.message : String(err),
+      }));
+      return false;
+    }
+  }, [authFetch, getNango, refresh]);
 
-        const syncRes = await authFetch("/api/connections/sync", {
-          method: "POST",
+  const disconnect = useCallback(
+    async (opts?: { revoke?: boolean }) => {
+      setState((prev) => ({ ...prev, connecting: true, error: null }));
+      try {
+        const url = opts?.revoke
+          ? "/api/connections/github?revoke=true"
+          : "/api/connections/github";
+        const res = await authFetch(url, {
+          method: "DELETE",
         });
-        if (!syncRes.ok) {
-          const syncData = (await syncRes.json().catch(() => ({}))) as {
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as {
             error?: string;
           };
-          throw new Error(
-            syncData.error ??
-              "GitHub authorized in Nango but Moncode could not save the connection.",
-          );
+          throw new Error(data.error ?? "Could not disconnect GitHub.");
         }
-
         await refresh();
         setState((prev) => ({ ...prev, connecting: false }));
         return true;
@@ -131,31 +171,8 @@ export function useGithubConnection() {
         return false;
       }
     },
-    [authFetch, getNango, refresh],
+    [authFetch, refresh],
   );
-
-  const disconnect = useCallback(async () => {
-    setState((prev) => ({ ...prev, connecting: true, error: null }));
-    try {
-      const res = await authFetch("/api/connections/github", {
-        method: "DELETE",
-      });
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(data.error ?? "Could not disconnect GitHub.");
-      }
-      await refresh();
-      setState((prev) => ({ ...prev, connecting: false }));
-      return true;
-    } catch (err) {
-      setState((prev) => ({
-        ...prev,
-        connecting: false,
-        error: err instanceof Error ? err.message : String(err),
-      }));
-      return false;
-    }
-  }, [authFetch, refresh]);
 
   return {
     ...state,
