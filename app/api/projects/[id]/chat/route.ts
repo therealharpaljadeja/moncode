@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { requireOwnedProject } from "@/lib/auth";
+import { getAgentSecret } from "@/lib/agent-auth";
 import { runAgentTurn } from "@/lib/agent-runner";
 import { getSession } from "@/lib/sandbox";
 
@@ -65,10 +66,16 @@ export async function POST(req: Request, context: RouteContext) {
           return;
         }
 
+        const origin = new URL(req.url).origin;
         for await (const event of runAgentTurn(
           session,
           prompt,
           abort.signal,
+          {
+            projectId,
+            apiBaseUrl: process.env.MONCODE_API_BASE_URL ?? origin,
+            agentSecret: getAgentSecret(),
+          },
         )) {
           send(sse(event.type, event));
         }

@@ -57,7 +57,19 @@ Never edit `package.json` to add a `deploy` script that uses a
   now" pointer (e.g. "Click 'Connect wallet' in the preview pane").
 - Don't create README files unless explicitly requested.
 
-## Curated skills
+## GitHub (via Nango)
+
+When the user asks to push code, create a repo, or open a PR, use the
+`mcp__moncode__github_api` tool only. Credentials never enter the sandbox.
+
+- `create_repo` — new GitHub repository
+- `push_workspace` — host reads this workspace and commits via GitHub API
+  (`owner`, `repo`, `message`, optional `branch`)
+- `create_pr` — open a pull request between branches
+
+Do **not** run `git push` or write tokens into the workspace. If GitHub is not
+connected, call `mcp__moncode__github_request_connection` — Moncode shows an
+inline connect card in chat.
 
 Monskills is loaded as a plugin. Use its `why-monad`, `addresses`,
 `gas`, `concepts`, `api`, and `wallet-integration` skills when relevant.

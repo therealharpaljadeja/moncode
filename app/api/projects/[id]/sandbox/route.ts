@@ -1,11 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { requireOwnedProject } from "@/lib/auth";
-import {
-  createSandboxForProject,
-  reattachSession,
-} from "@/lib/bootstrap";
-import { getSession, setSession } from "@/lib/sandbox";
+import { getOrCreateSandboxSession } from "@/lib/bootstrap";
+import { getSession } from "@/lib/sandbox";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,14 +18,7 @@ export async function POST(req: Request, context: RouteContext) {
 
   if (!session) {
     try {
-      const reattached = await reattachSession(projectId);
-      if (reattached) {
-        setSession(projectId, reattached);
-        session = reattached;
-      } else {
-        session = createSandboxForProject(projectId);
-        setSession(projectId, session);
-      }
+      session = await getOrCreateSandboxSession(projectId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return NextResponse.json(

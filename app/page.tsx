@@ -100,6 +100,9 @@ function ProjectsHub() {
           Moncode
         </div>
         <div className="flex-1" />
+        <Button asChild variant="ghost" size="sm">
+          <Link href="/connections">Connections</Link>
+        </Button>
         <WalletBadge />
         <Button variant="ghost" size="sm" onClick={() => logout()}>
           Sign out
