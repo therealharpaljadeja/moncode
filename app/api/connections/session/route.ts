@@ -7,6 +7,10 @@ import {
   getNango,
   isNangoConfigured,
 } from "@/lib/nango";
+import {
+  findGithubNangoConnectionId,
+  tryRestoreGithubFromNango,
+} from "@/lib/nango-sync";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +26,7 @@ export async function POST(req: Request) {
     );
   }
 
-  let body: { provider?: unknown; reconnect?: unknown };
+  let body: { provider?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -34,16 +38,37 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "unsupported provider" }, { status: 400 });
   }
 
+  const restored = await tryRestoreGithubFromNango(auth.userId);
+  if (restored) {
+    return NextResponse.json({
+      mode: "restored",
+      connection: {
+        provider: "github",
+        connected: true,
+        displayName: restored.username ?? null,
+        connectionId: restored.connectionId ?? null,
+      },
+    });
+  }
+
   const integrationId = getGithubIntegrationId();
   const nango = getNango();
 
-  const existing = await getConnection(auth.userId, "github");
-  if (body.reconnect && existing) {
+  const local = await getConnection(auth.userId, "github");
+  const nangoConnectionId =
+    local?.nangoConnectionId ??
+    (await findGithubNangoConnectionId(auth.userId));
+
+  if (nangoConnectionId) {
     const { data } = await nango.createReconnectSession({
-      connection_id: existing.nangoConnectionId,
+      connection_id: nangoConnectionId,
       integration_id: integrationId,
+      tags: {
+        end_user_id: auth.userId,
+        end_user_display_name: auth.userId,
+      },
     });
-    return NextResponse.json({ sessionToken: data.token });
+    return NextResponse.json({ sessionToken: data.token, mode: "reconnect" });
   }
 
   const { data } = await nango.createConnectSession({
@@ -54,5 +79,5 @@ export async function POST(req: Request) {
     allowed_integrations: [integrationId],
   });
 
-  return NextResponse.json({ sessionToken: data.token });
+  return NextResponse.json({ sessionToken: data.token, mode: "connect" });
 }

@@ -13,6 +13,11 @@ export const dynamic = "force-dynamic";
 
 type RouteContext = { params: Promise<{ provider: string }> };
 
+/**
+ * Soft disconnect by default: removes Moncode's local link only.
+ * Nango keeps the connection so reconnect can re-authorize without
+ * uninstalling the GitHub App. Pass ?revoke=true to delete from Nango too.
+ */
 export async function DELETE(req: Request, context: RouteContext) {
   const auth = await requireUser(req);
   if (auth instanceof NextResponse) return auth;
@@ -27,15 +32,20 @@ export async function DELETE(req: Request, context: RouteContext) {
     return NextResponse.json({ ok: true });
   }
 
-  if (isNangoConfigured()) {
+  const revoke = new URL(req.url).searchParams.get("revoke") === "true";
+
+  if (revoke && isNangoConfigured()) {
     try {
       const nango = getNango();
-      await nango.deleteConnection(getGithubIntegrationId(), row.nangoConnectionId);
+      await nango.deleteConnection(
+        getGithubIntegrationId(),
+        row.nangoConnectionId,
+      );
     } catch {
       // Still remove local record if Nango already deleted it.
     }
   }
 
   await deleteConnection(auth.userId, "github");
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, revoked: revoke });
 }

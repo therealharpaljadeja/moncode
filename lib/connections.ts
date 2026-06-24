@@ -67,6 +67,17 @@ export async function upsertConnection(input: {
   return row;
 }
 
+export async function getConnectionByNangoId(
+  nangoConnectionId: string,
+): Promise<Connection | null> {
+  const rows = await getDb()
+    .select()
+    .from(connections)
+    .where(eq(connections.nangoConnectionId, nangoConnectionId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export async function deleteConnection(
   userId: string,
   provider: ConnectionProvider,
